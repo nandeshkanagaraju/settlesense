@@ -41,12 +41,21 @@ from gen.lifecycle import (
     RefundRow,
     SettlementBatch,
     SettlementLine,
+    SettlementLineType,
     WorkingCalendar,
     build_clean_dataset,
     load_working_calendar,
     verify_clean_dataset,
 )
 from gen.profiles import PROFILES, MerchantProfile
+from gen.truth import (
+    EdgeType,
+    Truth,
+    TruthSelfCheckError,
+    build_truth,
+    run_self_check,
+    write_truth,
+)
 
 DEFAULT_CALENDAR: Final[Path] = Path("config/calendar_v1.yaml")
 DEFAULT_DAYS: Final[int] = 3
@@ -340,6 +349,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"  ... and {len(problems) - 40} more", file=sys.stderr)
         return 1
 
+    # Truth is built and self-checked BEFORE a single byte reaches disk. A truth
+    # file written from a dataset that does not balance makes every downstream
+    # metric confidently wrong, which is worse than having no truth file.
+    profiles_by_name = {profile.name: profile for profile in PROFILES}
+    truth = build_truth(dataset, calendar, profiles_by_name, args.seed)
+    try:
+        run_self_check(dataset, truth, calendar=calendar, profiles=profiles_by_name)
+    except TruthSelfCheckError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
     manifest = write_dataset(dataset, args.out, base_date)
     manifest.update(
         {
@@ -360,23 +380,101 @@ def main(argv: Sequence[str] | None = None) -> int:
             },
         }
     )
+    truth_path = args.out / f"truth_{args.seed}.json"
+    write_truth(truth, truth_path)
+    manifest["truth_file"] = truth_path.name
     (args.out / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
+    _report(args, calendar, base_date, dataset, truth, manifest, truth_path)
+    return 0
+
+
+def _report(
+    args: argparse.Namespace,
+    calendar: WorkingCalendar,
+    base_date: date,
+    dataset: CleanDataset,
+    truth: Truth,
+    manifest: dict[str, Any],
+    truth_path: Path,
+) -> None:
+    """Print the self-check result and a summary of what was generated."""
     counts = manifest["counts"]
     total_rows = sum(int(value) for key, value in counts.items() if key != "chains")
-    lines_per_batch = counts["settlement_lines"] / max(counts["batches"], 1)
-    print(f"seed {args.seed} | calendar {calendar.version} | base date {base_date.isoformat()}")
-    print(f"ground truth self-check: PASSED ({len(dataset.chains)} clean chains, 0 violations)")
-    print(
-        f"  {counts['ledger_rows']} ledger, {counts['payment_rows']} payments, "
-        f"{counts['refund_rows']} refunds, {counts['settlement_lines']} settlement lines, "
-        f"{counts['batches']} batches, {counts['bank_rows']} bank credits"
+    per_batch = [
+        sum(1 for line in dataset.settlement_lines if line.batch_id == batch.batch_id)
+        for batch in dataset.batches
+    ]
+    edge_counts = {
+        edge_type: sum(1 for edge in truth.edges if edge.edge_type is edge_type)
+        for edge_type in EdgeType
+    }
+    payment_lines = sum(
+        1 for line in dataset.settlement_lines if line.line_type is SettlementLineType.PAYMENT
     )
-    print(f"  {lines_per_batch:.1f} settlement lines per batch (N:1, per SDD 3.2)")
-    print(f"  {total_rows} rows across {manifest['day_count']} day bundles -> {args.out}")
-    return 0
+    refund_lines = len(dataset.settlement_lines) - payment_lines
+    mixed = sum(
+        1
+        for batch in dataset.batches
+        if any(
+            line.batch_id == batch.batch_id and line.line_type is SettlementLineType.REFUND
+            for line in dataset.settlement_lines
+        )
+    )
+
+    print(f"seed {args.seed} | calendar {calendar.version} | base date {base_date.isoformat()}")
+    print("")
+    print("GROUND-TRUTH SELF-CHECK: PASSED")
+    print("  cardinality  1 ORDER_TO_PAYMENT 1:1 .......... ok")
+    print("               2 PAYMENT_TO_SETTLEMENT 1:N ..... ok  (PAYMENT lines only)")
+    print("               3 SETTLEMENT_TO_BATCH N:1 ....... ok  (many lines per batch is normal)")
+    print("               4 BATCH_TO_BANK 1:1 ............. ok")
+    print("               5 PAYMENT_TO_REFUND 1:N ......... ok  (no upper bound)")
+    print("  balance      6 chains balance to the cent .... ok")
+    print(f"               7 batch net == signed line sum .. ok  ({mixed} mixed batches)")
+    print("              7a bank credit == batch net ...... ok  (incl. refund batches)")
+    print("              7b per-type field invariants ..... ok  (both shapes present)")
+    print("              7c PAYMENT_TO_SETTLEMENT purity .. ok  (0 refund-line edges)")
+    print("               8 truth IDs exist in dataset .... ok")
+    print("               9 fee recomputed from rate ...... ok")
+    print("              10 conservation, both identities . ok")
+    print("  dates       11 every date in 2026 ............ ok")
+    print("              12 arrival_day is a positive int . ok  (no wall clock written)")
+    print(f"              13 T+N respected vs {calendar.version} .... ok")
+    print("")
+    print("GENERATED")
+    print(f"  {'table':<22} {'rows':>8}   note")
+    print(f"  {'-' * 22} {'-' * 8}   {'-' * 44}")
+    print(f"  {'ledger_rows':<22} {counts['ledger_rows']:>8}   one per order")
+    print(f"  {'payment_rows':<22} {counts['payment_rows']:>8}   one per capture = Population A")
+    print(f"  {'refund_rows':<22} {counts['refund_rows']:>8}   partial and full")
+    print(
+        f"  {'settlement_lines':<22} {counts['settlement_lines']:>8}   "
+        f"{payment_lines} payment + {refund_lines} refund, signed"
+    )
+    print(
+        f"  {'settlement_batches':<22} {counts['batches']:>8}   "
+        f"Population B; {min(per_batch)}-{max(per_batch)} lines each"
+    )
+    print(f"  {'bank_rows':<22} {counts['bank_rows']:>8}   one credit per batch, 1:1")
+    print(f"  {'-' * 22} {'-' * 8}")
+    print(f"  {'total rows':<22} {total_rows:>8}   across {manifest['day_count']} day bundles")
+    print("")
+    print("TRUTH EDGES (typed, per-type cardinality)")
+    for edge_type in EdgeType:
+        print(f"  {edge_type.value:<24} {edge_counts[edge_type]:>8}")
+    print(f"  {'-' * 24} {'-' * 8}")
+    print(f"  {'total':<24} {len(truth.edges):>8}")
+    print("")
+    print(
+        f"  {len(truth.cases)} ReconciliationCases, "
+        f"{sum(1 for c in truth.cases if c.true_category is not None)} with a true variance "
+        f"category (clean chains have none)"
+    )
+    print("  generator_commit: null   (published at M1F in GENERATOR_MANIFEST.json)")
+    print(f"  -> {args.out}  +  {truth_path.name}")
 
 
 if __name__ == "__main__":  # pragma: no cover
