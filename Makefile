@@ -9,7 +9,13 @@
 # not on a module that has yet to be written.
 
 SHELL := /bin/bash
-PYTHON ?= python3
+
+# Prefer the project virtualenv. A bare `python3` is whatever is on PATH, which
+# here had neither ruff nor pytest installed - so `make check` failed at its
+# first line and had never actually run a single check. A build target that
+# cannot run is indistinguishable from one that passes, until you look.
+VENV_PYTHON := $(wildcard .venv/bin/python)
+PYTHON ?= $(if $(VENV_PYTHON),$(VENV_PYTHON),python3)
 CONFIG_DIR ?= config
 
 # $(call notimpl,<target>,<gate>,<module>)
@@ -45,8 +51,25 @@ gen-holdout:
 
 # --- tests and static checks ------------------------------------------------
 
+# Verbosity belongs to the CALLER. ARGS REPLACES the default flags rather than
+# being appended to them, because pytest keeps the quiet reporter when -v
+# follows -q:
+#
+#     pytest -q      -> no per-test names
+#     pytest -q -v   -> no per-test names   <-- appending cannot work
+#     pytest -v      -> per-test names
+#
+# -q therefore lives HERE and nowhere else. It is deliberately absent from
+# pyproject `addopts`, which applies to every invocation and would silently
+# override a flag typed on the command line.
+#
+#   make test                              quiet, per SDD section 8
+#   make test ARGS="-v"                    per-test names
+#   make test ARGS="-v tests/test_x.py"    one file, verbose
+PYTEST_FLAGS ?= -q
+
 test:
-	$(PYTHON) -m pytest -q
+	$(PYTHON) -m pytest $(if $(strip $(ARGS)),$(ARGS),$(PYTEST_FLAGS))
 
 check:
 	$(PYTHON) -m ruff check .
