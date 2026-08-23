@@ -1,0 +1,39 @@
+{
+  "calendar_version": "calendar_v1",
+  "edge_types": [
+    "order_to_payment",
+    "payment_to_settlement",
+    "settlement_to_batch",
+    "batch_to_bank",
+    "payment_to_refund"
+  ],
+  "frozen_at_gate": "M1F",
+  "gen_files": {
+    "gen/README.md": "9ef0262a5f0a0487",
+    "gen/__init__.py": "e3b0c44298fc1c14",
+    "gen/generate.py": "5e6170fa84d9f815",
+    "gen/lifecycle.py": "33d3d4d289a07a1c",
+    "gen/noise.py": "832215edadbf2651",
+    "gen/profiles.py": "3bb501c469cfd87e",
+    "gen/truth.py": "92128fffdfdf4519"
+  },
+  "gen_tree_sha256": "866cbddf91a5ebc3101e9014a7fd6b8bc22da53414d44cd3ac7dfc22d858cf2e",
+  "generator_commit": "fda19c6eb341d49380d7d7d254e76d053df2f4a2",
+  "seeds": {
+    "dev": 42,
+    "holdout": 999
+  },
+  "table_count": 6,
+  "tables": [
+    "ledger_rows",
+    "payment_rows",
+    "refund_rows",
+    "settlement_lines",
+    "settlement_batches",
+    "bank_rows"
+  ],
+  "withheld_noise_types": [
+    "garbled_narration",
+    "split_settlement"
+  ]
+}
