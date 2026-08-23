@@ -49,6 +49,7 @@ from gen.lifecycle import (
 from gen.noise import NoiseLedger, NoiseRates, apply_noise
 from gen.profiles import PROFILES
 from gen.truth import VarianceCategory
+from tests import amplification
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 CALENDAR_PATH = REPO_ROOT / "config" / "calendar_v1.yaml"
@@ -70,6 +71,45 @@ NARRATION_NOISE = ("truncate_utr", "drop_utr", "merchant_name_variants", "garble
 # cannot be expected to retain a readable prefix, and demanding one would be
 # asserting that the noise did not work.
 DESTRUCTIVE = frozenset({"drop_utr", "garbled_narration"})
+
+# THE INTERACTION: truncate_utr shortens a UTR, then merchant_name_variants
+# rewrites the same narration. Both sample the bank-credit population.
+PRODUCTION_TRUNCATE = Decimal("0.25")
+PRODUCTION_MERCHANT = Decimal("0.30")
+# THE COROLLARY, applied twice.
+#
+# At 1.0 a destructive partner touches every credit, `_analysable` filters them
+# all out, and seven of twelve pairs skipped: the interaction occurred and left
+# nothing to observe. Dropping to a symmetric 0.7 fixed the skips but left the
+# thinnest pair (drop_utr -> truncate_utr) with ONE analysable row - one seed
+# away from zero, which is where a test stops testing.
+#
+# So the rates are ASYMMETRIC. A destructive injector running first eats the
+# UTRs a later truncate would need, so it is held lower while the non-destructive
+# partner is pushed higher. Measured, not guessed:
+#
+#     symmetric 0.70 / 0.70   thinnest pair:  1 row
+#     dest 0.35 / safe 0.90   thinnest pair:  4 rows
+#     dest 0.25 / safe 0.95   thinnest pair:  5 rows
+PAIR_RATE_DESTRUCTIVE = Decimal("0.25")
+PAIR_RATE_SAFE = Decimal("0.95")
+
+
+def test_production_rates_are_borderline(clean: CleanDataset) -> None:
+    """Rule step 1, and an honest answer: this one is close to the line.
+
+    truncate x merchant at production is ~2.9 expected co-occurrences over ~39
+    credits. Below the threshold of 10, so amplification is required - but not
+    by the wide margin the other three have. Computed rather than asserted in
+    prose, so if the rates move the classification moves with them.
+    """
+    expected = amplification.expected_cooccurrence(
+        len(clean.batches), PRODUCTION_TRUNCATE, PRODUCTION_MERCHANT
+    )
+    assert expected < amplification.AMPLIFICATION_THRESHOLD, (
+        f"production co-occurrence is now {expected:.2f}; amplification is no "
+        "longer required and the fixtures should be simplified deliberately."
+    )
 
 
 @pytest.fixture(scope="module")
@@ -142,7 +182,14 @@ def test_the_truncated_prefix_survives_a_merchant_name_variant(clean: CleanDatas
     """The exact composition that broke, at full rate so every credit gets both."""
     dataset, ledger = _run(clean, truncate_utr=Decimal("1"), merchant_name_variants=Decimal("1"))
     rows = _analysable(clean, dataset, ledger)
-    assert rows, "no credit was both truncated and name-varied; nothing was tested"
+    amplification.record(
+        "truncate_utr x merchant_name_variants",
+        len(rows),
+        expected_at_production=amplification.expected_cooccurrence(
+            len(clean.batches), PRODUCTION_TRUNCATE, PRODUCTION_MERCHANT
+        ),
+        survivors=len(rows),
+    )
 
     fused: list[str] = []
     for batch_id, utr, narration in rows:
@@ -236,17 +283,21 @@ def test_the_prefix_survives_every_ordered_pair(
     because an intact UTR was still recognisable. Testing unordered pairs would
     have had a 50% chance of missing it entirely.
 
-    Rates are 0.7, not 1.0. At full rate a destructive partner touches every
-    credit, `_analysable` filters them all out, and the pair asserts nothing -
-    seven of twelve pairs skipped that way in the first draft. At 0.7 the
-    injectors overlap on some rows and miss on others, which is the state the
-    composition actually has to survive.
+    Rates are asymmetric and below 1.0 - see PAIR_RATE_DESTRUCTIVE. At full rate
+    a destructive partner touches every credit and the pair asserts nothing;
+    seven of twelve pairs skipped that way in the first draft. Every pair now
+    records its realised co-occurrence and fails at zero, so a pair that stops
+    reaching the interaction fails instead of going quietly green.
 
     Every pair is also checked for FUSION, which is meaningful even when the
     pair produces no truncated prefix. No pair is allowed to assert nothing.
     """
     monkeypatch.setattr(gen.noise, "NOISE_ORDER", (first, second))
-    dataset, ledger = _run(clean, **{first: Decimal("0.7"), second: Decimal("0.7")})
+    rates = {
+        name: (PAIR_RATE_DESTRUCTIVE if name in DESTRUCTIVE else PAIR_RATE_SAFE)
+        for name in (first, second)
+    }
+    dataset, ledger = _run(clean, **rates)
 
     unspaced = {name.replace(" ", "") for name in MERCHANT_NAMES}
     fused = [
@@ -260,9 +311,24 @@ def test_the_prefix_survives_every_ordered_pair(
         sorted(set(fused))[:5]
     )
 
+    rows = _analysable(clean, dataset, ledger)
+    if "truncate_utr" in {first, second}:
+        # Only pairs containing truncate_utr can produce a prefix at all. For
+        # those, the interaction MUST have been observed - a pair that quietly
+        # yields no analysable row is the skip this rule forbids.
+        amplification.record(
+            f"pair {first} -> {second}",
+            len(rows),
+            minimum=3,
+            expected_at_production=amplification.expected_cooccurrence(
+                len(clean.batches), PRODUCTION_TRUNCATE, PRODUCTION_MERCHANT
+            ),
+            survivors=len(rows),
+        )
+
     broken = [
         f"{batch_id}: {narration!r} has no prefix token of {utr}"
-        for batch_id, utr, narration in _analysable(clean, dataset, ledger)
+        for batch_id, utr, narration in rows
         if _truncated_prefix(utr, narration) is None
     ]
     assert not broken, f"{first} -> {second} destroyed the prefix:\n" + "\n".join(broken[:5])

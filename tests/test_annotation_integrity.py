@@ -55,6 +55,7 @@ from gen.noise import (
 )
 from gen.profiles import PROFILES
 from gen.truth import TruthSelfCheckError, VarianceCategory, build_truth, run_self_check
+from tests import amplification
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 CALENDAR_PATH = REPO_ROOT / "config" / "calendar_v1.yaml"
@@ -77,6 +78,29 @@ COLLIDING_SUBSET = (
 )
 
 FULL_ORDER_SAMPLES = 150
+
+# THE INTERACTION: out_of_order_arrival annotates a bank credit, then
+# unexplainable withholds that same credit. Both sample the credit population,
+# one per batch.
+PRODUCTION_OUT_OF_ORDER = Decimal("0.04")
+PRODUCTION_UNEXPLAINABLE = Decimal("0.06")
+AMPLIFIED_OUT_OF_ORDER = Decimal("0.9")
+AMPLIFIED_UNEXPLAINABLE = Decimal("0.4")
+
+
+def test_production_rates_are_too_sparse_to_prove_anything(clean: CleanDataset) -> None:
+    """Rule step 1. Compute it; do not assert it in a comment.
+
+    Verified directly: with the prune removed entirely, the production-rate
+    sweep stays GREEN. That is what an expectation below 1 buys you.
+    """
+    expected = amplification.expected_cooccurrence(
+        len(clean.batches), PRODUCTION_OUT_OF_ORDER, PRODUCTION_UNEXPLAINABLE
+    )
+    assert expected < amplification.AMPLIFICATION_THRESHOLD, (
+        f"production co-occurrence is now {expected:.2f}; the amplified sweep "
+        "below is no longer required and should be retired deliberately."
+    )
 
 
 @pytest.fixture(scope="module")
@@ -119,6 +143,13 @@ def _dangling(dataset: CleanDataset, ledger: NoiseLedger) -> list[NoiseAnnotatio
 
 
 def test_no_annotation_dangles_at_production_rates(clean: CleanDataset) -> None:
+    """SMOKE CHECK on the shipped configuration. NOT the proof.
+
+    This passes with the prune removed entirely: at production rates the two
+    injectors meet on ~0.09 credits, so the interaction it is meant to observe
+    almost never happens. It confirms the data that ships is well-formed, and
+    nothing more. The amplified sweeps below are the evidence.
+    """
     dataset, ledger = apply_noise(
         clean, random.Random(SEED), PROFILES_BY_NAME, NoiseRates(), include_withheld=True
     )
@@ -174,10 +205,15 @@ def test_a_category_free_annotation_for_a_removed_row_is_pruned(clean: CleanData
         f"{len(still_there)} annotation(s) survive for withheld credits: {still_there[:5]}"
     )
 
-    assert ledger.counts.get("_pruned_targets_removed_later", 0) > 0, (
-        "no pruning was recorded, yet credits were removed after being annotated. "
-        "Pruning must be reported, not silent - an unreported prune is "
-        "indistinguishable from an annotation that was never made."
+    # The pruned count IS the co-occurrence: an annotation removed because its
+    # row was withheld is precisely one instance of the interaction.
+    amplification.record(
+        "out_of_order_arrival x unexplainable (forced)",
+        ledger.counts.get("_pruned_targets_removed_later", 0),
+        expected_at_production=amplification.expected_cooccurrence(
+            len(clean.batches), PRODUCTION_OUT_OF_ORDER, PRODUCTION_UNEXPLAINABLE
+        ),
+        survivors=len(dataset.bank_rows),
     )
 
 
@@ -389,14 +425,29 @@ def test_no_dangling_annotation_in_any_ordering_of_the_colliding_subset(
     assert len(orderings) == 120, f"expected 120 orderings, got {len(orderings)}"
 
     failures: list[str] = []
+    collisions = 0
     for order in orderings:
         dataset, ledger = _run_in_order(clean, order, monkeypatch)
+        collisions += ledger.counts.get("_pruned_targets_removed_later", 0)
         dangling = _dangling(dataset, ledger)
         if dangling:
             failures.append(
                 f"order {order}: {len(dangling)} dangling, e.g. "
                 f"{dangling[0].noise_type}/{dangling[0].category} on {dangling[0].target_id}"
             )
+    # Rule step 3: the interaction must have REACHED the sweep. An ordering
+    # sweep in which the two injectors never met would pass on every ordering
+    # while testing none of them - which is exactly what it did at production
+    # rates, staying green with the prune deleted.
+    amplification.record(
+        "annotation prune, 120-ordering sweep",
+        collisions,
+        expected_at_production=amplification.expected_cooccurrence(
+            len(clean.batches), PRODUCTION_OUT_OF_ORDER, PRODUCTION_UNEXPLAINABLE
+        )
+        * Decimal(len(orderings)),
+        minimum=len(orderings),  # at least one collision per ordering
+    )
     assert not failures, (
         f"{len(failures)} of 120 orderings leave dangling annotations:\n" + "\n".join(failures[:5])
     )

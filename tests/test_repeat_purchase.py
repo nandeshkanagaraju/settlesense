@@ -40,6 +40,7 @@ from gen.lifecycle import (
 from gen.noise import NoiseLedger, NoiseRates, _noise_id, apply_noise
 from gen.profiles import PROFILES
 from gen.truth import Truth, VarianceCategory, build_truth
+from tests import amplification
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 CALENDAR_PATH = REPO_ROOT / "config" / "calendar_v1.yaml"
@@ -88,21 +89,47 @@ def shipped(clean: CleanDataset, calendar: WorkingCalendar) -> Built:
     return dataset, ledger, build_truth(dataset, calendar, PROFILES_BY_NAME, SEED, noise=ledger)
 
 
+# THE INTERACTION: a repeat purchase cloned FROM a partially-captured payment.
+# Both injectors sample the chain population, so the co-occurrence is the
+# product over that population.
+PRODUCTION_PARTIAL = Decimal("0.020")
+PRODUCTION_DUPLICATE = Decimal("0.010")
+AMPLIFIED_PARTIAL = Decimal("0.50")
+AMPLIFIED_DUPLICATE = Decimal("0.20")
+
+
 @pytest.fixture(scope="module")
 def saturated(clean: CleanDataset, calendar: WorkingCalendar) -> Built:
-    """Rates raised so partial captures and repeats OVERLAP heavily.
+    """Rates raised until the overlap is certain rather than lucky.
 
-    At production rates the overlap is ~1 payment in 5,000 - the defect could
-    sit in a shipped dataset for a long time before a repeat happened to clone a
-    partial capture. Raising both rates makes the interaction certain rather
-    than lucky. The invariant under test does not depend on the rate; only the
-    chance of observing a violation does.
+    At production rates the expected co-occurrence is ~1 payment in 5,000 - see
+    test_production_rates_are_too_sparse_to_prove_anything, which computes it.
+    The invariant under test does not depend on the rate; only the chance of
+    OBSERVING a violation does, and at an expectation of 1.0 that chance is a
+    coin toss the suite would lose silently.
     """
     return _build(
         clean,
         calendar,
-        partial_captures=Decimal("0.50"),
-        duplicate_ledger_rows=Decimal("0.20"),
+        partial_captures=AMPLIFIED_PARTIAL,
+        duplicate_ledger_rows=AMPLIFIED_DUPLICATE,
+    )
+
+
+def test_production_rates_are_too_sparse_to_prove_anything(clean: CleanDataset) -> None:
+    """Rule step 1: compute the expectation, and require amplification below it.
+
+    Stated as a test rather than a comment so it cannot quietly stop being true.
+    If someone raises the production rates enough that the interaction becomes
+    common, this fails and the amplified fixture can be retired deliberately.
+    """
+    expected = amplification.expected_cooccurrence(
+        len(clean.chains), PRODUCTION_PARTIAL, PRODUCTION_DUPLICATE
+    )
+    assert expected < amplification.AMPLIFICATION_THRESHOLD, (
+        f"production co-occurrence is now {expected:.2f}, at or above the "
+        f"{amplification.AMPLIFICATION_THRESHOLD} threshold. The amplified "
+        "fixture is no longer required; retire it deliberately."
     )
 
 
@@ -124,6 +151,13 @@ def _repeat_ids(truth: Truth) -> set[str]:
 def test_every_repeat_purchase_captures_in_full(
     scenario: str, request: pytest.FixtureRequest
 ) -> None:
+    """SMOKE at `shipped`, PROOF at `saturated`.
+
+    The shipped variant passed with the wholesale-clone bug present, because at
+    production rates the two injectors overlap on ~1 payment in 5,000 and seed
+    42 contained none. It is kept as a smoke check on the data that actually
+    ships; it is not evidence.
+    """
     dataset, _, truth = request.getfixturevalue(scenario)
     repeats = _repeat_ids(truth)
     assert repeats, f"{scenario}: no repeat purchases generated; nothing was checked"
@@ -199,9 +233,13 @@ def test_a_repeat_of_a_partial_capture_is_still_a_full_capture(saturated: Built)
                     f"authorized {source.authorized}"
                 )
 
-    assert examined > 0, (
-        "no repeat purchase was cloned from a partially-captured payment, so the "
-        "inheritance path was never exercised. Raise the saturated rates."
+    amplification.record(
+        "repeat purchase x partial capture",
+        examined,
+        expected_at_production=amplification.expected_cooccurrence(
+            len(dataset.chains), PRODUCTION_PARTIAL, PRODUCTION_DUPLICATE
+        ),
+        survivors=len(repeats) - examined,
     )
     assert not problems, (
         f"{len(problems)} of {examined} repeat(s) inherited partial-capture state:\n"

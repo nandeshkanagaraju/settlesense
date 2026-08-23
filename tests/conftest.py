@@ -17,6 +17,8 @@ from collections.abc import Iterator
 
 import pytest
 
+from tests import amplification
+
 # marker -> the human-facing heading in the summary
 FAULT_CATEGORIES: dict[str, str] = {
     "config_refusal": "Config refusals        (a broken config must not load)",
@@ -45,6 +47,7 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) ->
 
 
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
+    _report_interactions(terminalreporter)
     if not any(_counts.values()):
         return
     terminalreporter.write_sep("=", "fault injection by category")
@@ -58,3 +61,20 @@ def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
         terminalreporter.write_line(f"  {heading}  {count:>3}{suffix}")
     terminalreporter.write_line(f"  {'':<55}{'':>3}")
     terminalreporter.write_line(f"  {'TOTAL guards proven able to fail':<55}{total:>3}")
+
+
+def _report_interactions(terminalreporter: pytest.TerminalReporter) -> None:
+    """Print every amplified interaction and what it would have been at
+    production rates.
+
+    Reported unconditionally rather than only on failure. An interaction that is
+    shrinking - 40 co-occurrences last month, 3 today - is on its way to zero,
+    and zero is where the test silently stops testing anything. The number has
+    to be visible while it is still non-zero.
+    """
+    lines = amplification.summary_lines()
+    if not lines:
+        return
+    terminalreporter.write_sep("=", "rate-amplified interactions")
+    for line in lines:
+        terminalreporter.write_line(line)

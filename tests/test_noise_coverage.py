@@ -36,6 +36,7 @@ from gen.lifecycle import CleanDataset, WorkingCalendar, build_clean_dataset, lo
 from gen.noise import NOISE_REGISTRY, NoiseRates, apply_noise
 from gen.profiles import PROFILES
 from gen.truth import VarianceCategory
+from tests import amplification
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 CALENDAR_PATH = REPO_ROOT / "config" / "calendar_v1.yaml"
@@ -453,3 +454,103 @@ def test_batch_and_case_grain_differ_by_two_orders_of_magnitude(clean: CleanData
         f"case:batch population ratio is only {ratio:.1f}; the grain trap this "
         "suite guards depends on them differing sharply"
     )
+
+
+# ===========================================================================
+# The rate-amplification rule, surveyed across every pair of injectors
+# ===========================================================================
+
+
+def test_every_injector_pair_is_classified_for_amplification(
+    populations: dict[str, int],
+) -> None:
+    """Rule step 1, applied to the WHOLE registry rather than to four known pairs.
+
+    The four interactions this suite tests were found one defect at a time.
+    This computes the expected co-occurrence for every pair sharing a grain, so
+    the next one is visible BEFORE it costs a debugging session.
+
+    It does not demand a test for each - most pairs interact in no interesting
+    way. It reports which are too sparse to be worth testing at production
+    rates, which is the fact that has to be known before someone writes an
+    interaction test and trusts the shipped rates.
+    """
+    sparse: list[str] = []
+    dense: list[str] = []
+    names = sorted(CONFIGURED_RATE)
+    for index, first in enumerate(names):
+        for second in names[index + 1 :]:
+            if DECLARED_GRAIN[first] != DECLARED_GRAIN[second]:
+                continue  # different populations; they cannot collide row-wise
+            expected = amplification.expected_cooccurrence(
+                populations[first], CONFIGURED_RATE[first], CONFIGURED_RATE[second]
+            )
+            line = f"{first} x {second}: {expected:.2f}"
+            (sparse if expected < amplification.AMPLIFICATION_THRESHOLD else dense).append(line)
+
+    print("\nsame-grain injector pairs, expected co-occurrence at production rates:")
+    for line in sorted(sparse):
+        print(f"    SPARSE (must amplify)  {line}")
+    for line in sorted(dense):
+        print(f"    dense  (may test live) {line}")
+
+    assert sparse or dense, "no same-grain pairs found; the survey inspected nothing"
+    assert sparse, (
+        "every same-grain pair is now dense enough to test at production rates. "
+        "If the rates really were raised that far, the amplified fixtures across "
+        "this suite can be retired - deliberately, not by drift."
+    )
+
+
+@pytest.mark.noise_accounting
+def test_the_cooccurrence_arithmetic_is_right() -> None:
+    """FAULT INJECTION for the shared helper every amplified test now depends on.
+
+    The whole rule rests on this multiplication. If it were wrong - a rate
+    squared, a population dropped - every classification above would be wrong in
+    the same direction, and the suite would report confident nonsense.
+    """
+    assert amplification.expected_cooccurrence(1000, Decimal("0.5"), Decimal("0.2")) == Decimal(
+        "100.0"
+    )
+    assert amplification.expected_cooccurrence(39, Decimal("0.04"), Decimal("0.06")) == Decimal(
+        "0.0936"
+    )
+    assert amplification.expected_cooccurrence(0, Decimal("1")) == Decimal("0")
+    assert amplification.expected_cooccurrence(500, Decimal("0")) == Decimal("0")
+    # Single-rate case is just the marginal expectation.
+    assert amplification.expected_cooccurrence(5000, Decimal("0.02")) == Decimal("100.00")
+    with pytest.raises(ValueError):
+        amplification.expected_cooccurrence(-1, Decimal("0.5"))
+
+
+@pytest.mark.noise_accounting
+def test_record_fails_when_the_interaction_never_fired() -> None:
+    """FAULT INJECTION: a zero co-occurrence must FAIL, not pass quietly.
+
+    This is the rule's whole point. Before it existed, four tests reported
+    success while asserting properties about empty sets.
+    """
+    with pytest.raises(AssertionError, match=r"interaction fired"):
+        amplification.record(
+            "deliberately-empty interaction",
+            0,
+            expected_at_production=Decimal("0.09"),
+        )
+
+
+@pytest.mark.noise_accounting
+def test_record_fails_when_amplification_consumed_every_row() -> None:
+    """FAULT INJECTION for the COROLLARY.
+
+    An interaction that fired on every row and left no survivors has happened
+    and proved nothing - the state seven of twelve narration pairs were in when
+    they silently skipped.
+    """
+    with pytest.raises(AssertionError, match="consumed every"):
+        amplification.record(
+            "deliberately-total interaction",
+            12,
+            expected_at_production=Decimal("0.5"),
+            survivors=0,
+        )
