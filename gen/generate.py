@@ -1,4 +1,383 @@
-"""M1 - CLI entrypoint for the adversarial data generator.
+"""M1 part A - the generator CLI.
 
-Not yet implemented; see SDD section 9 for the gate map.
+    python -m gen.generate --seed 42 --out data/
+
+Writes SIX tables per simulated day. Chargebacks and disputes are out of v1
+scope, so there is no seventh table, no DISPUTE_DEBIT line type, and no dispute
+edge anywhere in gen/.
+
+    day{N}_ledger.csv       day{N}_payments.csv     day{N}_refunds.csv
+    day{N}_settlements.csv  day{N}_batches.csv      day{N}_bank.csv
+
+A day bundle holds the rows whose OWN event_date falls on that day, which is
+what a merchant actually hands over: today's orders, and the bank credit for a
+payment captured two days ago. That is also what makes the Day 1 -> Day 2 ->
+Day 3 demo real - day 2's file closes an exception day 1 could not.
+
+`--days` is therefore the number of CAPTURE days. Settlement and bank rows
+trail behind them by the profile's T+N, so the run emits bundles past --days
+until every chain has closed. Truncating instead would leave clean chains
+unmatched, and clean chains that do not close cannot verify their own truth.
 """
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import random
+import sys
+from collections.abc import Iterable, Sequence
+from datetime import date, timedelta
+from decimal import Decimal
+from pathlib import Path
+from typing import Any, Final
+
+from gen.lifecycle import (
+    BankRow,
+    CleanDataset,
+    LedgerRow,
+    PaymentRow,
+    RefundRow,
+    SettlementBatch,
+    SettlementLine,
+    WorkingCalendar,
+    build_clean_dataset,
+    load_working_calendar,
+    verify_clean_dataset,
+)
+from gen.profiles import PROFILES, MerchantProfile
+
+DEFAULT_CALENDAR: Final[Path] = Path("config/calendar_v1.yaml")
+DEFAULT_DAYS: Final[int] = 3
+DEFAULT_RECORDS: Final[int] = 5_000
+
+LEDGER_COLUMNS: Final[tuple[str, ...]] = (
+    "order_id",
+    "invoice_no",
+    "gross",
+    "order_date",
+    "customer_id",
+    "sku",
+)
+PAYMENT_COLUMNS: Final[tuple[str, ...]] = (
+    "payment_id",
+    "order_id",
+    "method",
+    "authorized",
+    "captured",
+    "status",
+    "captured_at",
+)
+REFUND_COLUMNS: Final[tuple[str, ...]] = ("refund_id", "payment_id", "amount", "created_at")
+SETTLEMENT_COLUMNS: Final[tuple[str, ...]] = (
+    "settlement_id",
+    "batch_id",
+    "line_type",
+    "payment_id",
+    "refund_id",
+    "gross",
+    "fee",
+    "tax",
+    "net",
+    "settled_event_date",
+)
+BATCH_COLUMNS: Final[tuple[str, ...]] = ("batch_id", "utr", "net_total", "settled_event_date")
+BANK_COLUMNS: Final[tuple[str, ...]] = (
+    "bank_txn_id",
+    "value_date",
+    "amount",
+    "narration",
+    "direction",
+)
+
+
+def build_plan(
+    records: int, days: int, profiles: Sequence[MerchantProfile]
+) -> list[tuple[int, MerchantProfile, int]]:
+    """Split `records` across days then profiles, deterministically.
+
+    Remainders go to the earliest days and the earliest profiles in sorted
+    order, so the split never depends on iteration order (D4).
+    """
+    if records < 1:
+        raise ValueError(f"--records must be at least 1, got {records}")
+    if days < 1:
+        raise ValueError(f"--days must be at least 1, got {days}")
+    if records < days * len(profiles):
+        raise ValueError(
+            f"--records {records} is too small for {days} days x {len(profiles)} profiles; "
+            f"need at least {days * len(profiles)}"
+        )
+
+    ordered = sorted(profiles, key=lambda profile: profile.name)
+    per_day = [records // days + (1 if index < records % days else 0) for index in range(days)]
+
+    plan: list[tuple[int, MerchantProfile, int]] = []
+    for day_index, day_total in enumerate(per_day, start=1):
+        share = [
+            day_total // len(ordered) + (1 if index < day_total % len(ordered) else 0)
+            for index in range(len(ordered))
+        ]
+        for profile, count in zip(ordered, share, strict=True):
+            for sequence in range(count):
+                plan.append((day_index, profile, sequence))
+    return plan
+
+
+def _day_index(value: date, base_date: date) -> int:
+    return (value - base_date).days + 1
+
+
+def _fmt(value: object) -> str:
+    if isinstance(value, Decimal):
+        return f"{value:.2f}"
+    if isinstance(value, date):
+        return value.isoformat()
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _write_csv(path: Path, columns: Sequence[str], rows: Iterable[Sequence[object]]) -> int:
+    """Write one CSV with a fixed column order and LF line endings."""
+    count = 0
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        writer = csv.writer(handle, lineterminator="\n")
+        writer.writerow(columns)
+        for row in rows:
+            writer.writerow([_fmt(value) for value in row])
+            count += 1
+    return count
+
+
+def _bucket(rows: Iterable[Any], key: Any, base_date: date) -> dict[int, list[Any]]:
+    buckets: dict[int, list[Any]] = {}
+    for row in rows:
+        buckets.setdefault(_day_index(key(row), base_date), []).append(row)
+    return buckets
+
+
+def write_dataset(dataset: CleanDataset, out_dir: Path, base_date: date) -> dict[str, Any]:
+    """Write six CSVs per day bundle. Returns a manifest describing the run."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ledger = _bucket(dataset.ledger_rows, lambda r: r.order_date, base_date)
+    payments = _bucket(dataset.payment_rows, lambda r: r.captured_at, base_date)
+    refunds = _bucket(dataset.refund_rows, lambda r: r.created_at, base_date)
+    settlements = _bucket(dataset.settlement_lines, lambda r: r.settled_event_date, base_date)
+    batches = _bucket(dataset.batches, lambda r: r.settled_event_date, base_date)
+    bank = _bucket(dataset.bank_rows, lambda r: r.value_date, base_date)
+
+    last_day = max(
+        [1]
+        + [
+            day
+            for mapping in (ledger, payments, refunds, settlements, batches, bank)
+            for day in mapping
+        ]
+    )
+
+    def ledger_row(row: LedgerRow) -> tuple[object, ...]:
+        return (row.order_id, row.invoice_no, row.gross, row.order_date, row.customer_id, row.sku)
+
+    def payment_row(row: PaymentRow) -> tuple[object, ...]:
+        return (
+            row.payment_id,
+            row.order_id,
+            row.method,
+            row.authorized,
+            row.captured,
+            row.status,
+            row.captured_at,
+        )
+
+    def refund_row(row: RefundRow) -> tuple[object, ...]:
+        return (row.refund_id, row.payment_id, row.amount, row.created_at)
+
+    def settlement_row(row: SettlementLine) -> tuple[object, ...]:
+        return (
+            row.settlement_id,
+            row.batch_id,
+            row.line_type.value,
+            row.payment_id,
+            row.refund_id,
+            row.gross,
+            row.fee,
+            row.tax,
+            row.net,
+            row.settled_event_date,
+        )
+
+    def batch_row(row: SettlementBatch) -> tuple[object, ...]:
+        return (row.batch_id, row.utr, row.net_total, row.settled_event_date)
+
+    def bank_row(row: BankRow) -> tuple[object, ...]:
+        return (row.bank_txn_id, row.value_date, row.amount, row.narration, row.direction)
+
+    days: list[dict[str, Any]] = []
+    for day in range(1, last_day + 1):
+        content_date = base_date + timedelta(days=day - 1)
+        counts = {
+            "ledger": _write_csv(
+                out_dir / f"day{day}_ledger.csv",
+                LEDGER_COLUMNS,
+                (ledger_row(r) for r in sorted(ledger.get(day, []), key=lambda r: r.order_id)),
+            ),
+            "payments": _write_csv(
+                out_dir / f"day{day}_payments.csv",
+                PAYMENT_COLUMNS,
+                (payment_row(r) for r in sorted(payments.get(day, []), key=lambda r: r.payment_id)),
+            ),
+            "refunds": _write_csv(
+                out_dir / f"day{day}_refunds.csv",
+                REFUND_COLUMNS,
+                (refund_row(r) for r in sorted(refunds.get(day, []), key=lambda r: r.refund_id)),
+            ),
+            "settlements": _write_csv(
+                out_dir / f"day{day}_settlements.csv",
+                SETTLEMENT_COLUMNS,
+                (
+                    settlement_row(r)
+                    for r in sorted(settlements.get(day, []), key=lambda r: r.settlement_id)
+                ),
+            ),
+            "batches": _write_csv(
+                out_dir / f"day{day}_batches.csv",
+                BATCH_COLUMNS,
+                (batch_row(r) for r in sorted(batches.get(day, []), key=lambda r: r.batch_id)),
+            ),
+            "bank": _write_csv(
+                out_dir / f"day{day}_bank.csv",
+                BANK_COLUMNS,
+                (bank_row(r) for r in sorted(bank.get(day, []), key=lambda r: r.bank_txn_id)),
+            ),
+        }
+        days.append(
+            {
+                "arrival_day": day,
+                "file_content_date": content_date.isoformat(),
+                "rows": counts,
+            }
+        )
+
+    return {"base_date": base_date.isoformat(), "day_count": last_day, "days": days}
+
+
+def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="python -m gen.generate",
+        description="Generate a synthetic settlement dataset. All dates are in 2026.",
+    )
+    parser.add_argument("--seed", type=int, default=42, help="seed for the single random.Random")
+    parser.add_argument("--out", type=Path, required=True, help="output directory for CSVs")
+    parser.add_argument("--days", type=int, default=DEFAULT_DAYS, help="number of capture days")
+    parser.add_argument(
+        "--records", type=int, default=DEFAULT_RECORDS, help="number of payment chains"
+    )
+    parser.add_argument(
+        "--include-withheld",
+        action="store_true",
+        default=False,
+        help="include the two withheld noise types (M1 part B)",
+    )
+    parser.add_argument(
+        "--calendar", type=Path, default=DEFAULT_CALENDAR, help="path to calendar_v1.yaml"
+    )
+    return parser.parse_args(argv)
+
+
+def _check_profiles_against_calendar(calendar: WorkingCalendar) -> None:
+    """The generator states T+N independently; disagreement is a loud failure.
+
+    gen/ defines its own settlement cycles on purpose. Asserting they match the
+    calendar does not weaken that independence - the code paths remain separate
+    - it just refuses to run when the two statements of the same fact drift.
+    """
+    for profile in PROFILES:
+        configured = calendar.settlement_cycles.get(profile.name)
+        if configured is None:
+            raise SystemExit(
+                f"calendar has no settlement cycle for {profile.name!r}; "
+                f"known: {sorted(calendar.settlement_cycles)}"
+            )
+        if configured != profile.settlement_cycle_days:
+            raise SystemExit(
+                f"settlement cycle drift for {profile.name}: gen/profiles.py says "
+                f"T+{profile.settlement_cycle_days}, {calendar.version} says T+{configured}. "
+                f"Reconcile them before generating."
+            )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parse_args(argv)
+
+    if args.include_withheld:
+        raise SystemExit(
+            "--include-withheld is not implemented: noise injection is M1 part B "
+            "(gen/noise.py). Refusing rather than silently writing clean data and "
+            "labelling it a held-out set."
+        )
+
+    calendar = load_working_calendar(args.calendar)
+    _check_profiles_against_calendar(calendar)
+
+    base_date = calendar.next_working_day(calendar.window_start)
+    rng = random.Random(args.seed)
+    plan = build_plan(args.records, args.days, PROFILES)
+
+    dataset = build_clean_dataset(rng, plan, calendar, base_date)
+
+    problems = verify_clean_dataset(dataset)
+    if problems:
+        print(
+            f"GROUND TRUTH SELF-CHECK FAILED - {len(problems)} violation(s). Nothing was written.",
+            file=sys.stderr,
+        )
+        for problem in problems[:40]:
+            print(f"  {problem}", file=sys.stderr)
+        if len(problems) > 40:
+            print(f"  ... and {len(problems) - 40} more", file=sys.stderr)
+        return 1
+
+    manifest = write_dataset(dataset, args.out, base_date)
+    manifest.update(
+        {
+            "seed": args.seed,
+            "capture_days": args.days,
+            "records": args.records,
+            "calendar_version": calendar.version,
+            "include_withheld": False,
+            "generator_commit": None,  # written only in GENERATOR_MANIFEST.json, after the freeze
+            "counts": {
+                "chains": len(dataset.chains),
+                "ledger_rows": len(dataset.ledger_rows),
+                "payment_rows": len(dataset.payment_rows),
+                "refund_rows": len(dataset.refund_rows),
+                "settlement_lines": len(dataset.settlement_lines),
+                "batches": len(dataset.batches),
+                "bank_rows": len(dataset.bank_rows),
+            },
+        }
+    )
+    (args.out / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    counts = manifest["counts"]
+    total_rows = sum(int(value) for key, value in counts.items() if key != "chains")
+    lines_per_batch = counts["settlement_lines"] / max(counts["batches"], 1)
+    print(f"seed {args.seed} | calendar {calendar.version} | base date {base_date.isoformat()}")
+    print(f"ground truth self-check: PASSED ({len(dataset.chains)} clean chains, 0 violations)")
+    print(
+        f"  {counts['ledger_rows']} ledger, {counts['payment_rows']} payments, "
+        f"{counts['refund_rows']} refunds, {counts['settlement_lines']} settlement lines, "
+        f"{counts['batches']} batches, {counts['bank_rows']} bank credits"
+    )
+    print(f"  {lines_per_batch:.1f} settlement lines per batch (N:1, per SDD 3.2)")
+    print(f"  {total_rows} rows across {manifest['day_count']} day bundles -> {args.out}")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
