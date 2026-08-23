@@ -171,6 +171,7 @@ def test_float_annotations_appear_only_where_the_spec_permits() -> None:
     )
 
 
+@pytest.mark.charter_guard
 def test_the_scanners_actually_match_something() -> None:
     """POSITIVE CONTROLS. Each detector is shown to fire on a known violation.
 
@@ -226,6 +227,7 @@ def test_bernoulli_takes_a_decimal_not_a_float() -> None:
     assert not any("float" in str(hint) for hint in hints), f"float in the signature: {hints}"
 
 
+@pytest.mark.charter_guard
 def test_bernoulli_rejects_a_float_at_runtime() -> None:
     """A type hint is not enforcement. Passing a float must not silently work.
 

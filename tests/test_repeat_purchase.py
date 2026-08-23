@@ -159,6 +159,7 @@ def test_every_repeat_purchase_has_captured_status(
 # ===========================================================================
 
 
+@pytest.mark.noise_accounting
 def test_a_repeat_of_a_partial_capture_is_still_a_full_capture(saturated: Built) -> None:
     """The exact defect: link each repeat back to its source and check.
 
@@ -262,6 +263,7 @@ def test_no_unannotated_partial_capture_anywhere_in_the_dataset(
 
 
 @pytest.mark.parametrize("scenario", ["shipped", "saturated"])
+@pytest.mark.noise_accounting
 def test_partial_captures_actually_exist_to_be_checked(
     scenario: str, request: pytest.FixtureRequest
 ) -> None:
@@ -274,6 +276,7 @@ def test_partial_captures_actually_exist_to_be_checked(
     )
 
 
+@pytest.mark.noise_accounting
 def test_every_annotated_partial_capture_really_is_one(shipped: Built) -> None:
     """The other direction: a PARTIAL_CAPTURE label with full capture behind it.
 

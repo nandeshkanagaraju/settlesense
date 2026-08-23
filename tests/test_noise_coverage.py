@@ -222,6 +222,7 @@ def holdout_truth(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
 # ===========================================================================
 
 
+@pytest.mark.noise_accounting
 def test_every_configured_noise_type_occurs_at_least_once(
     realised: dict[str, int], populations: dict[str, int]
 ) -> None:
@@ -246,6 +247,7 @@ def test_every_configured_noise_type_occurs_at_least_once(
     )
 
 
+@pytest.mark.noise_accounting
 def test_the_registry_is_not_empty(populations: dict[str, int]) -> None:
     """Guards the guard: iterating an empty registry proves nothing."""
     # Restated by hand, so a new injector must be declared here too - with its
@@ -305,6 +307,7 @@ def _categories(truth: dict[str, Any]) -> set[str]:
     return seen
 
 
+@pytest.mark.noise_accounting
 def test_every_variance_category_occurs_with_all_noise_on(
     holdout_truth: dict[str, Any],
 ) -> None:
@@ -323,6 +326,7 @@ def test_every_variance_category_occurs_with_all_noise_on(
     )
 
 
+@pytest.mark.noise_accounting
 def test_every_non_withheld_category_occurs_in_the_tuned_dataset(
     dev_truth: dict[str, Any],
 ) -> None:

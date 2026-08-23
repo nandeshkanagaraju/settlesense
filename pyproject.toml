@@ -47,6 +47,15 @@ addopts = "--strict-markers --strict-config"
 markers = [
     "golden: byte-compares full pipeline output against a committed golden file",
     "determinism: a D1-D13 charter guard test",
+    # FAULT-INJECTION CATEGORIES. Every guard in this project is paired with a
+    # test that makes it fire. A check you cannot break on demand is one you
+    # know has not complained, which is not the same as knowing it works.
+    # `make fault-report` summarises these by category.
+    "config_refusal: feeds the config loader a deliberately broken file",
+    "charter_guard: feeds a D1-D13 scanner a known violation",
+    "truth_injection: corrupts a dataset and requires the self-check to fail",
+    "noise_accounting: breaks the two-way noise ledger in one direction",
+    "hygiene: repository and manifest invariants",
 ]
 
 # ---------------------------------------------------------------------------

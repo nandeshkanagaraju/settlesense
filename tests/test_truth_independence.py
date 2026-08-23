@@ -125,6 +125,7 @@ def test_truth_survives_total_narration_destruction(
     )
 
 
+@pytest.mark.truth_injection
 def test_blanking_narration_changes_the_dataset_but_not_truth(
     calendar: WorkingCalendar, baseline: tuple[CleanDataset, set[tuple[str, str]]]
 ) -> None:
@@ -240,6 +241,7 @@ def test_truth_module_does_not_split_or_substring_search() -> None:
     assert not offenders, "gen/truth.py scans text:\n" + "\n".join(offenders)
 
 
+@pytest.mark.truth_injection
 def test_the_static_guard_would_catch_a_parser() -> None:
     """Positive control: the AST checks fire on code that DOES parse narration.
 

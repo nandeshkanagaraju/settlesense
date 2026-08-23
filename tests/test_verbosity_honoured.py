@@ -207,6 +207,7 @@ def test_the_probe_test_actually_exists() -> None:
 # ===========================================================================
 
 
+@pytest.mark.charter_guard
 def test_appending_v_to_q_does_not_restore_verbosity() -> None:
     """POSITIVE CONTROL, and the justification for the ARGS-replaces design.
 

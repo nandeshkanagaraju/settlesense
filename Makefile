@@ -26,7 +26,7 @@ define notimpl
 	@exit 1
 endef
 
-.PHONY: help gen gen-holdout test eval eval-ai ui check golden-accept bench config-check
+.PHONY: help gen gen-holdout test eval eval-ai ui check golden-accept bench config-check fault-report
 
 help:
 	@echo "SettleSense targets:"
@@ -34,6 +34,7 @@ help:
 	@echo "  gen-holdout   generate the held-out dataset  (seed 999, +withheld noise)"
 	@echo "  test          pytest: no network, deterministic, under 60s"
 	@echo "  check         ruff + mypy + determinism guard tests"
+	@echo "  fault-report  guards proven able to fail, by category"
 	@echo "  config-check  load every config file and print the config hash"
 	@echo "  eval          held-out evaluation across all baselines"
 	@echo "  eval-ai       real model run - the experiment, not a test"
@@ -123,3 +124,10 @@ golden-accept:
 	   echo "If a golden SHOULD change, state why in the commit message, then:"; \
 	   echo "  SETTLESENSE_ACCEPT_GOLDEN=1 make golden-accept"; exit 1)
 	$(PYTHON) -m pytest tests/golden --update-golden
+
+# Every guard in this project is paired with a test that makes it FIRE. This
+# counts those pairs by category. A check that has only ever passed may be
+# inspecting an empty set or asserting something the code cannot violate; the
+# difference is invisible in a green run, so it is counted separately.
+fault-report:
+	$(PYTHON) -m pytest -q -m "config_refusal or charter_guard or truth_injection or noise_accounting or hygiene"

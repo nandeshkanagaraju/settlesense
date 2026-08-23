@@ -97,6 +97,7 @@ def test_a_faithful_roundtrip_still_loads(tmp_path: pathlib.Path) -> None:
 # ===========================================================================
 
 
+@pytest.mark.config_refusal
 def test_deleting_card_from_profile_a_raises_naming_both(tmp_path: pathlib.Path) -> None:
     """The message must name the profile AND the method, not just 'invalid config'.
 
@@ -121,6 +122,7 @@ def test_deleting_card_from_profile_a_raises_naming_both(tmp_path: pathlib.Path)
 
 @pytest.mark.parametrize("profile", PROFILE_NAMES)
 @pytest.mark.parametrize("method", METHOD_NAMES)
+@pytest.mark.config_refusal
 def test_any_missing_rate_raises(profile: str, method: str, tmp_path: pathlib.Path) -> None:
     """12 cases, generated. Hand-writing one would test one twelfth of the gap.
 
@@ -139,6 +141,7 @@ def test_any_missing_rate_raises(profile: str, method: str, tmp_path: pathlib.Pa
 
 
 @pytest.mark.parametrize("profile", PROFILE_NAMES)
+@pytest.mark.config_refusal
 def test_a_profile_missing_every_method_raises(profile: str, tmp_path: pathlib.Path) -> None:
     """The degenerate case: an empty method table is not "no methods priced".
 
@@ -159,6 +162,7 @@ def test_a_profile_missing_every_method_raises(profile: str, tmp_path: pathlib.P
 # ===========================================================================
 
 
+@pytest.mark.config_refusal
 def test_a_method_added_to_one_profile_becomes_mandatory_everywhere(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -199,6 +203,7 @@ def test_the_same_method_added_to_every_profile_loads(tmp_path: pathlib.Path) ->
         assert "emi" in config.profiles[profile], f"{profile} lost the new method"
 
 
+@pytest.mark.config_refusal
 def test_a_missing_rate_is_never_defaulted_to_zero(tmp_path: pathlib.Path) -> None:
     """The specific silent behaviour: absent treated as free.
 
@@ -238,6 +243,7 @@ def test_deleting_a_whole_profile_is_not_a_completeness_error(
         assert set(config.profiles[profile]) == set(METHOD_NAMES)
 
 
+@pytest.mark.config_refusal
 def test_an_empty_profiles_block_raises(tmp_path: pathlib.Path) -> None:
     """...but zero profiles is still an error: the union would be empty and the
     completeness check would pass over nothing at all."""

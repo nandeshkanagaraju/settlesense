@@ -127,6 +127,7 @@ def split_payment_ids(payment_lines: dict[str, list[SettlementLine]]) -> list[st
     return sorted(pid for pid, lines in payment_lines.items() if len(lines) >= 2)
 
 
+@pytest.mark.noise_accounting
 def test_there_are_splits_to_examine(split_payment_ids: list[str]) -> None:
     """Guards the guard: every assertion below iterates the split set.
 
@@ -202,6 +203,7 @@ def test_every_split_line_is_priced_on_its_own_gross(
     )
 
 
+@pytest.mark.noise_accounting
 def test_a_split_part_fee_is_not_the_remainder(
     noisy: tuple[CleanDataset, NoiseLedger, Truth],
     payment_lines: dict[str, list[SettlementLine]],

@@ -139,6 +139,7 @@ def test_there_were_refunds_to_check(short_window: CleanDataset) -> None:
 # ===========================================================================
 
 
+@pytest.mark.truth_injection
 def test_a_refund_after_every_batch_raises(
     short_window: CleanDataset, calendar: WorkingCalendar
 ) -> None:
@@ -169,6 +170,7 @@ def test_a_refund_after_every_batch_raises(
     assert victim.profile_name in message, "the error must name the profile whose batches ran out"
 
 
+@pytest.mark.truth_injection
 def test_the_fallback_does_not_silently_pick_an_earlier_batch(
     short_window: CleanDataset, calendar: WorkingCalendar
 ) -> None:
@@ -212,6 +214,7 @@ def test_verify_clean_dataset_passes_on_good_data(short_window: CleanDataset) ->
     assert verify_clean_dataset(short_window) == []
 
 
+@pytest.mark.truth_injection
 def test_verify_clean_dataset_catches_a_backdated_refund_line(
     short_window: CleanDataset,
 ) -> None:

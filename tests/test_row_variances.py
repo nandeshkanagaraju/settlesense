@@ -150,6 +150,7 @@ def test_row_variance_ids_resolve_to_real_rows(built: Built) -> None:
 # ===========================================================================
 
 
+@pytest.mark.noise_accounting
 def test_every_duplicate_confirmed_row_is_recorded(built: Built) -> None:
     """Two-way: the ledger's count and truth's count must agree exactly.
 
@@ -204,6 +205,7 @@ def test_shipped_dev_duplicate_count_is_pinned(shipped_dev: dict[str, Any]) -> N
 # ===========================================================================
 
 
+@pytest.mark.noise_accounting
 def test_every_orphan_bank_credit_is_recorded(built: Built) -> None:
     """Two-way accounting again, over bank-row-grain annotations."""
     _, ledger, truth = built
@@ -312,6 +314,7 @@ def test_no_row_variance_carries_a_money_denominator_from_another_population(
 # ===========================================================================
 
 
+@pytest.mark.noise_accounting
 def test_every_categorised_variance_lands_in_exactly_one_population(built: Built) -> None:
     """The rule that outlives the counts.
 
@@ -374,6 +377,7 @@ def test_every_annotation_grain_maps_to_a_known_population(built: Built) -> None
     )
 
 
+@pytest.mark.noise_accounting
 def test_the_completeness_check_actually_inspected_something(built: Built) -> None:
     """Guards the guard: an empty annotation set makes requirement 5 vacuous."""
     _, ledger, _ = built

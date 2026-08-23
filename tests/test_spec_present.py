@@ -233,6 +233,7 @@ def test_no_formatter_changes_a_document(tmp_path: pathlib.Path) -> None:
     )
 
 
+@pytest.mark.charter_guard
 def test_the_formatter_would_bite_without_the_exclusion(tmp_path: pathlib.Path) -> None:
     """POSITIVE CONTROL. The guard must be load-bearing, not inherited habit.
 

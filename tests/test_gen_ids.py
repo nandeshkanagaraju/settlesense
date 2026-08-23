@@ -279,12 +279,14 @@ def _call_sites() -> list[tuple[int, str, set[str]]]:
     return sorted(sites)
 
 
+@pytest.mark.charter_guard
 def test_the_audit_finds_every_known_call_site() -> None:
     """Guards the guard: an AST scan that matches nothing passes silently."""
     sites = _call_sites()
     assert len(sites) >= 8, f"expected at least 8 minting call sites, found {len(sites)}"
 
 
+@pytest.mark.charter_guard
 def test_every_id_minting_call_site_passes_the_seed() -> None:
     """One missed call site collides for exactly one entity - find it statically.
 

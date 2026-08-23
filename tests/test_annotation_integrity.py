@@ -128,6 +128,7 @@ def test_no_annotation_dangles_at_production_rates(clean: CleanDataset) -> None:
     )
 
 
+@pytest.mark.truth_injection
 def test_the_dataset_actually_removed_something(clean: CleanDataset) -> None:
     """Guards the guard: with nothing deleted, dangling is impossible by default."""
     dataset, _ = apply_noise(
@@ -207,6 +208,7 @@ def test_pruning_does_not_touch_annotations_for_surviving_rows(clean: CleanDatas
 # ===========================================================================
 
 
+@pytest.mark.truth_injection
 def test_a_categorised_dangling_annotation_fails_the_self_check(
     clean: CleanDataset, calendar: WorkingCalendar
 ) -> None:
@@ -277,6 +279,7 @@ def test_the_same_annotation_without_a_category_does_not_fail(
     run_self_check(dataset, truth, calendar=calendar, profiles=PROFILES_BY_NAME, noise=ledger)
 
 
+@pytest.mark.truth_injection
 def test_the_prune_itself_keeps_a_categorised_annotation_for_a_removed_row(
     clean: CleanDataset, monkeypatch: pytest.MonkeyPatch
 ) -> None:
