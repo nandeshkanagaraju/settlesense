@@ -228,13 +228,18 @@ def test_yaml_float_raises_d12(config_dir: Path) -> None:
 
 def test_every_rate_is_decimal_not_float() -> None:
     mdr = load_mdr_rates(CONFIG_DIR / MDR)
-    assert isinstance(mdr.gst_rate, Decimal)
-    assert not isinstance(mdr.gst_rate, float)
+    # Checked through `type(...)` rather than `isinstance(..., float)`. mypy
+    # proves the isinstance branch unreachable from the ANNOTATION - which is a
+    # claim about the loader, not a guarantee about what it returns. D12 exists
+    # because a float can arrive from YAML at runtime, so the check must survive
+    # the type checker being satisfied.
+    assert type(mdr.gst_rate) is Decimal, f"gst_rate is {type(mdr.gst_rate).__name__}"
     for profile in mdr.profile_names():
         for method in mdr.method_names(profile):
             rate = mdr.rate_for(profile, method)
-            assert isinstance(rate, Decimal), f"{profile}.{method} is {type(rate).__name__}"
-            assert not isinstance(rate, float), f"{profile}.{method} is a float (D12)"
+            assert type(rate) is Decimal, (
+                f"{profile}.{method} is {type(rate).__name__}, not Decimal (D12)"
+            )
 
 
 def test_every_threshold_is_decimal_not_float() -> None:
@@ -249,11 +254,14 @@ def test_every_threshold_is_decimal_not_float() -> None:
             value = getattr(group, field.name)
             if isinstance(value, int) and not isinstance(value, bool):
                 continue  # genuine counts: max_per_exception, retries, minutes
-            assert isinstance(value, Decimal), (
+            # `type(...) is Decimal`, not isinstance: a float is not a Decimal
+            # subclass, so mypy proves the isinstance-float branch unreachable
+            # and refuses it. The runtime check must survive that - D12 is about
+            # what YAML actually yields, not about what the annotation promises.
+            assert type(value) is Decimal, (
                 f"thresholds.{group_field.name}.{field.name} is "
                 f"{type(value).__name__}, expected Decimal (D12)"
             )
-            assert not isinstance(value, float)
             checked += 1
     assert checked > 0, "swept nothing; the thresholds tree changed shape"
 

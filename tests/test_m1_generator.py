@@ -793,9 +793,15 @@ def test_money_cells_parse_to_two_decimal_places(dev_dir: Path) -> None:
         for row in read_table(dev_dir, table):
             for column in columns:
                 value = q(row[column])
-                assert -value.as_tuple().exponent == 2, (
-                    f"{table}.{column} = {row[column]!r} is not 2 dp"
+                # exponent is `int | Literal["n", "N", "F"]`; the string forms
+                # are NaN and Infinity, which a quantized money value cannot be.
+                # Asserted rather than cast, so a NaN reaching here fails loudly
+                # instead of being silently negated into nonsense.
+                exponent = value.as_tuple().exponent
+                assert isinstance(exponent, int), (
+                    f"{table}.{column} = {row[column]!r} is not a finite Decimal"
                 )
+                assert -exponent == 2, f"{table}.{column} = {row[column]!r} is not 2 dp"
                 assert isinstance(value, Decimal)
                 checked += 1
     assert checked > 10_000, f"only checked {checked} money cells"

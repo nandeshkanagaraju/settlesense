@@ -258,8 +258,8 @@ def check_forbidden_import(paths: Iterator[Path], forbidden: str) -> list[Violat
                     violations.append(
                         Violation(
                             path,
-                            node.lineno,
-                            node.col_offset,
+                            getattr(node, "lineno", 0),
+                            getattr(node, "col_offset", 0),
                             f"imports {name!r}. The gen/ and settlesense/ paths must "
                             f"share no code: a bug in a shared helper would cancel "
                             f"itself out and the evaluation would measure nothing.",

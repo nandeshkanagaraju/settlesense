@@ -72,10 +72,16 @@ PYTEST_FLAGS ?= -q
 test:
 	$(PYTHON) -m pytest $(if $(strip $(ARGS)),$(ARGS),$(PYTEST_FLAGS))
 
+# tests/ is type-checked too. It was excluded, and had accumulated six errors
+# nobody could see - the same shape as `make check` running a python3 with no
+# ruff installed. A check that is not running looks exactly like one that
+# passes. The guards ARE the deliverable here; they get the same scrutiny as
+# the code they guard.
 check:
 	$(PYTHON) -m ruff check .
 	$(PYTHON) -m ruff format --check .
 	$(PYTHON) -m mypy settlesense gen eval
+	$(PYTHON) -m mypy --strict tests
 	$(PYTHON) -m pytest -q -m determinism
 
 # Loads all three config files through the strict loader and prints the hash
