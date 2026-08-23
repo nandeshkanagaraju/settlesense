@@ -371,24 +371,28 @@ def merchant_name_variants(
     """
     bank = list(rows.bank_rows)
     txn_to_batch = {bank_txn_id_for(b.batch_id): b.batch_id for b in rows.batches}
+    if profiles is None:
+        raise ValueError("merchant_name_variants needs the profile table")
+    # Match the merchant name EXACTLY, from the known set. Defining it as
+    # "every token that is not NEFT or the UTR" breaks the moment an earlier
+    # injector truncates the UTR: the leftover prefix stops being recognised,
+    # gets absorbed into the name, and the unspacing variant fuses the two into
+    # one token - destroying a prefix that was supposed to stay recoverable.
+    merchant_names = sorted(
+        (profile.merchant_name for profile in profiles.values()), key=len, reverse=True
+    )
     annotations: list[NoiseAnnotation] = []
 
     for index in _pick(rng, bank, rate):
         row = bank[index]
-        head = row.narration.partition(" SETTLEMENT")[0]
-        tokens = head.split()
-        utr = _utr_in(row.narration)
-        name_tokens = [t for t in tokens if t != "NEFT" and t != utr]
-        if not name_tokens:
-            continue
-        name = " ".join(name_tokens)
-        variant = _name_variant(name, rng)
-        bank[index] = replace(row, narration=row.narration.replace(name, variant, 1))
-        # By the constructive link: an earlier injector may already have removed
-        # the UTR this row was matched by.
         batch_id = txn_to_batch.get(row.bank_txn_id)
         if batch_id is None:
             continue
+        name = next((m for m in merchant_names if m in row.narration), None)
+        if name is None:
+            continue
+        variant = _name_variant(name, rng)
+        bank[index] = replace(row, narration=row.narration.replace(name, variant, 1))
         annotations.append(
             NoiseAnnotation(
                 "merchant_name_variants",
@@ -1146,10 +1150,30 @@ def apply_noise(
             day_overrides.update(result.day_overrides)
         counts[name] = len(result.annotations)
 
+    # `unexplainable` runs last and can withhold a bank credit that an earlier
+    # presentation injector already annotated. A delivery note about a row that
+    # no longer exists is moot, so it is dropped. Only category-free annotations
+    # are prunable: a dangling annotation that CARRIES truth is a real error and
+    # must still fail the self-check.
+    surviving = (
+        {r.order_id for r in current.ledger_rows}
+        | {r.payment_id for r in current.payment_rows}
+        | {r.refund_id for r in current.refund_rows}
+        | {line.settlement_id for line in current.settlement_lines}
+        | {b.batch_id for b in current.batches}
+        | {r.bank_txn_id for r in current.bank_rows}
+    )
+    kept = [
+        a
+        for a in annotations
+        if a.category is not None or a.target_kind != "ledger_row" or a.target_id in surviving
+    ]
+    pruned = len(annotations) - len(kept)
+    if pruned:
+        counts["_pruned_targets_removed_later"] = pruned
+
     ledger = NoiseLedger(
-        annotations=tuple(
-            sorted(annotations, key=lambda a: (a.noise_type, a.target_kind, a.target_id))
-        ),
+        annotations=tuple(sorted(kept, key=lambda a: (a.noise_type, a.target_kind, a.target_id))),
         counts=dict(sorted(counts.items())),
         format_overrides=format_overrides,
         day_overrides=day_overrides,

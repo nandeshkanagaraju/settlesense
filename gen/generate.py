@@ -416,7 +416,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     rng = random.Random(args.seed)
     plan = build_plan(args.records, args.days, PROFILES)
 
-    dataset = build_clean_dataset(rng, plan, calendar, base_date)
+    dataset = build_clean_dataset(rng, plan, calendar, base_date, args.seed)
 
     problems = verify_clean_dataset(dataset)
     if problems:

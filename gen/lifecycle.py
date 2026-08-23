@@ -430,12 +430,18 @@ def generate_clean_chain(
     calendar: WorkingCalendar,
     base_date: date,
     last_capture_date: date,
+    seed: int,
 ) -> Chain:
     """Produce one complete, internally consistent chain. No noise.
 
     `rng` is the single seeded generator, threaded through explicitly (D3).
     `day` is a 1-indexed simulated capture day; `sequence` disambiguates chains
     within a (profile, day) so every derived ID is unique and reproducible.
+
+    `seed` is part of every canonical ID tuple. Without it two datasets built
+    from different seeds would share every identifier, and the held-out set
+    would not be independent of the dev set in the one respect that matters
+    most for an evaluation.
 
     `last_capture_date` bounds refund creation. SDD 3.1a puts every REFUND line
     in the batch settling ON OR AFTER the refund date, so a refund created after
@@ -449,8 +455,8 @@ def generate_clean_chain(
     order_date = _check_year(base_date + timedelta(days=day - 1), "order date")
     captured_at = order_date  # clean chains capture on the order date
 
-    order_id = _stable_id("ORD", profile.name, day, sequence)
-    payment_id = _stable_id("PAY", profile.name, day, sequence)
+    order_id = _stable_id("ORD", seed, profile.name, day, sequence)
+    payment_id = _stable_id("PAY", seed, profile.name, day, sequence)
 
     gross = money(Decimal(rng.randint(profile.min_gross_paise, profile.max_gross_paise)) / 100)
 
@@ -487,7 +493,7 @@ def generate_clean_chain(
         )
         _check_year(refund_created, "refund created date")
         refund = RefundRow(
-            refund_id=_stable_id("RFD", profile.name, day, sequence),
+            refund_id=_stable_id("RFD", seed, profile.name, day, sequence),
             payment_id=payment_id,
             amount=refund_amount,
             created_at=refund_created,
@@ -508,7 +514,7 @@ def generate_clean_chain(
     settled_event_date = calendar.next_working_day(captured_at)
 
     payment_line = PendingSettlementLine(
-        settlement_id=_stable_id("SET", profile.name, day, sequence, "payment"),
+        settlement_id=_stable_id("SET", seed, profile.name, day, sequence, "payment"),
         line_type=SettlementLineType.PAYMENT,
         payment_id=payment_id,
         refund_id=None,
@@ -525,7 +531,7 @@ def generate_clean_chain(
         # settled_event_date is provisional: assembly moves it to the first batch
         # settling on or after the refund date.
         refund_line = PendingSettlementLine(
-            settlement_id=_stable_id("SET", profile.name, day, sequence, "refund"),
+            settlement_id=_stable_id("SET", seed, profile.name, day, sequence, "refund"),
             line_type=SettlementLineType.REFUND,
             payment_id=payment_id,
             refund_id=refund.refund_id,
@@ -567,6 +573,7 @@ def assemble_batches(
     chains: Sequence[Chain],
     calendar: WorkingCalendar,
     profiles: Mapping[str, MerchantProfile],
+    seed: int,
 ) -> tuple[tuple[SettlementLine, ...], tuple[SettlementBatch, ...], tuple[BankRow, ...]]:
     """Group lines into real multi-line batches, then credit each batch once.
 
@@ -621,8 +628,8 @@ def assemble_batches(
             buckets[(profile_name, settled_date)],
             key=lambda line: (line.line_type.value, line.settlement_id),
         )
-        batch_id = _stable_id("BAT", profile_name, settled_date.isoformat())
-        utr = _stable_utr(profile_name, settled_date.isoformat(), batch_id)
+        batch_id = _stable_id("BAT", seed, profile_name, settled_date.isoformat())
+        utr = _stable_utr(seed, profile_name, settled_date.isoformat(), batch_id)
 
         members = tuple(line.in_batch(batch_id, settled_date) for line in pending)
         settlement_lines.extend(members)
@@ -675,6 +682,7 @@ def build_clean_dataset(
     plan: Sequence[tuple[int, MerchantProfile, int]],
     calendar: WorkingCalendar,
     base_date: date,
+    seed: int,
 ) -> CleanDataset:
     """Run the whole clean pipeline for a deterministic (day, profile, seq) plan."""
     last_capture_date = base_date + timedelta(days=max(day for day, _, _ in plan) - 1)
@@ -687,11 +695,12 @@ def build_clean_dataset(
             calendar=calendar,
             base_date=base_date,
             last_capture_date=last_capture_date,
+            seed=seed,
         )
         for day, profile, sequence in plan
     ]
     profiles = {profile.name: profile for _, profile, _ in plan}
-    settlement_lines, batches, bank_rows = assemble_batches(chains, calendar, profiles)
+    settlement_lines, batches, bank_rows = assemble_batches(chains, calendar, profiles, seed)
 
     return CleanDataset(
         chains=tuple(sorted(chains, key=lambda chain: chain.payment.payment_id)),

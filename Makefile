@@ -38,12 +38,10 @@ help:
 # --- data generation --------------------------------------------------------
 
 gen:
-	$(call notimpl,gen,Gate 1 / M1,gen/generate.py)
-	$(PYTHON) -m gen.generate --seed 42 --out data/
+	$(PYTHON) -m gen.generate --seed 42 --out data/ --days 20
 
 gen-holdout:
-	$(call notimpl,gen-holdout,Gate 1 / M1,gen/generate.py)
-	$(PYTHON) -m gen.generate --seed 999 --out data/holdout/ --include-withheld
+	$(PYTHON) -m gen.generate --seed 999 --out data/holdout/ --days 20 --include-withheld
 
 # --- tests and static checks ------------------------------------------------
 

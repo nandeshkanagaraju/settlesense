@@ -47,6 +47,7 @@ __all__ = [
     "Truth",
     "TruthCase",
     "TruthEdge",
+    "TruthRowVariance",
     "TruthSelfCheckError",
     "VarianceCategory",
     "Violation",
@@ -150,6 +151,25 @@ class TruthBatchLink:
 
 
 @dataclass(frozen=True)
+class TruthRowVariance:
+    """Truth for a variance that belongs to a ROW, not to a case or a batch link.
+
+    A byte-identical duplicate ledger row is not a payment, so it is not a
+    ReconciliationCase; an orphan bank credit has no batch, so it is not a batch
+    link. Both still carry a true category the eval has to score, so they get
+    their own table rather than being forced into a population they are not part
+    of - or, worse, dropped from truth entirely.
+    """
+
+    row_id: str
+    row_kind: str  # ledger_row | bank_row
+    true_category: VarianceCategory
+    resolvable_in_principle: bool
+    noise_type: str
+    detail: str
+
+
+@dataclass(frozen=True)
 class TruthCase:
     """Ground truth for one ReconciliationCase - one per captured payment.
 
@@ -194,6 +214,7 @@ class Truth:
     edges: tuple[TruthEdge, ...]
     cases: tuple[TruthCase, ...]  # Population A
     batch_links: tuple[TruthBatchLink, ...]  # Population B - separate table
+    row_variances: tuple[TruthRowVariance, ...]  # neither population; own table
     calendar_version: str
     seed: int
     generator_commit: None  # literally null; see write_truth
@@ -358,6 +379,25 @@ def build_truth(
             )
         )
 
+    # Row-grain variances: real truth that belongs to neither population.
+    row_variances = tuple(
+        sorted(
+            (
+                TruthRowVariance(
+                    row_id=a.target_id,
+                    row_kind=a.target_kind,
+                    true_category=a.category,
+                    resolvable_in_principle=a.resolvable,
+                    noise_type=a.noise_type,
+                    detail=a.detail,
+                )
+                for a in (noise.annotations if noise else ())
+                if a.target_kind in {"ledger_row", "bank_row"} and a.category is not None
+            ),
+            key=lambda r: (r.row_kind, r.row_id, r.noise_type),
+        )
+    )
+
     edges.sort(key=lambda edge: (edge.edge_type.value, edge.src_id, edge.dst_id))
     cases.sort(key=lambda case: case.case_id)
     batch_links.sort(key=lambda link: link.batch_id)
@@ -365,6 +405,7 @@ def build_truth(
         edges=tuple(edges),
         cases=tuple(cases),
         batch_links=tuple(batch_links),
+        row_variances=row_variances,
         calendar_version=calendar.version,
         seed=seed,
         generator_commit=None,
@@ -840,6 +881,7 @@ def truth_to_dict(truth: Truth) -> dict[str, Any]:
             "edges": len(truth.edges),
             "cases": len(truth.cases),
             "batch_links": len(truth.batch_links),
+            "row_variances": len(truth.row_variances),
             **{
                 edge_type.value: sum(1 for e in truth.edges if e.edge_type is edge_type)
                 for edge_type in EdgeType
@@ -861,6 +903,18 @@ def truth_to_dict(truth: Truth) -> dict[str, Any]:
                 "noise_types": list(link.noise_types),
             }
             for link in truth.batch_links
+        ],
+        # Neither Population A nor B: duplicate ledger rows and orphan credits.
+        "row_variances": [
+            {
+                "row_id": row.row_id,
+                "row_kind": row.row_kind,
+                "true_category": row.true_category.value,
+                "resolvable_in_principle": row.resolvable_in_principle,
+                "noise_type": row.noise_type,
+                "detail": row.detail,
+            }
+            for row in truth.row_variances
         ],
         "cases": [
             {
