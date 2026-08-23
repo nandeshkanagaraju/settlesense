@@ -307,9 +307,25 @@ def test_global_conservation_both_identities(dev_dir: Path) -> None:
         (q(b["net_total"]) for b in batches if bank_txn_id_for(b["batch_id"]) not in credited),
         ZERO,
     )
-    assert sum_bank.quantize(Q2) == (sum_batches + orphan - missing).quantize(Q2), (
+    # The third licensed break: sub-rupee rounding residuals on surviving
+    # credits (SDD 4.2 P9). Recomputed here from the CSVs rather than read from
+    # truth - this test exists to be an independent witness, so taking the
+    # figure from the file it is checking would make it agree with itself.
+    rounding = sum(
+        (
+            q(r["amount"]) - q(expected_txn[r["bank_txn_id"]]["net_total"])
+            for r in bank
+            if r["bank_txn_id"] in expected_txn
+        ),
+        ZERO,
+    )
+    assert abs(rounding) < Decimal("100.00"), (
+        f"residuals total {rounding}; individually they must be sub-rupee, so a "
+        "large total means something other than rounding moved a credit"
+    )
+    assert sum_bank.quantize(Q2) == (sum_batches + orphan - missing + rounding).quantize(Q2), (
         f"batch side: bank {sum_bank} != batches {sum_batches} "
-        f"+ orphans {orphan} - missing {missing}"
+        f"+ orphans {orphan} - missing {missing} + rounding {rounding}"
     )
     assert sum_net.quantize(Q2) == sum_lines.quantize(Q2), "the two sides disagree"
 

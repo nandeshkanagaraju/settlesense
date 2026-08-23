@@ -69,6 +69,7 @@ __all__ = [
     "mixed_amount_formats",
     "out_of_order_arrival",
     "partial_captures",
+    "rounding_residual",
     "split_settlement",
     "truncate_utr",
     "unexplainable",
@@ -76,6 +77,16 @@ __all__ = [
 
 ZERO: Final[Decimal] = Decimal("0.00")
 _BASIS: Final[int] = 10_000
+
+# Each `unexplainable` mode must occur at least this many times per run. Both
+# UNEXPLAINED (an orphan credit) and MISSING_VS_LATE_CREDIT (a withheld payout)
+# are scored categories; at batch grain the configured rate expects ~2 firings
+# in total, which is not enough to guarantee either.
+_MIN_UNEXPLAINABLE: Final[int] = 2
+
+# Same reasoning for ROUNDING_DIFFERENCE: it is a scored category, so its
+# presence must not depend on the draw.
+_MIN_ROUNDING: Final[int] = 3
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +110,17 @@ class NoiseAnnotation:
     category: VarianceCategory | None
     resolvable: bool
     detail: str
+    # The money this injection put out of balance, at this annotation's grain.
+    #
+    # RECORDED BY THE INJECTOR, never re-derived downstream. The injector is the
+    # only thing that knows what it moved; anything reconstructing the figure
+    # later is guessing from the result, which is the same mistake as recovering
+    # a batch->bank link by parsing the narration.
+    #
+    # ZERO is a real answer and is not the same as None. A delayed settlement
+    # has a variance of exactly zero - every rupee is present, just late - while
+    # a presentation-only injection has no variance to state at all.
+    amount: Decimal = ZERO
 
 
 @dataclass(frozen=True)
@@ -136,6 +158,8 @@ class NoiseRates:
     delayed_settlement: Decimal = Decimal("0.015")
     out_of_order_arrival: Decimal = Decimal("0.04")
     split_settlement: Decimal = Decimal("0.010")  # WITHHELD
+    # batch-grain again (~40 targets): a residual lands on a bank CREDIT.
+    rounding_residual: Decimal = Decimal("0.15")
 
     def for_type(self, name: str) -> Decimal:
         if not hasattr(self, name):
@@ -180,6 +204,20 @@ class NoiseLedger:
             if a.noise_type == "unexplainable" and a.detail.startswith("missing_credit")
         )
 
+    def rounding_residual_total(self) -> Decimal:
+        """Signed sum of every rounding residual applied to a bank credit.
+
+        The self-check predicts the bank total from the batch total plus the
+        licensed breaks; this is one of them. Signed, because residuals go both
+        ways and a magnitude would over-predict.
+        """
+        return money(
+            sum(
+                (a.amount for a in self.annotations if a.noise_type == "rounding_residual"),
+                start=ZERO,
+            )
+        )
+
     def duplicate_confirmed_order_ids(self) -> frozenset[str]:
         """Order IDs that legitimately appear twice: byte-identical ingest artefacts."""
         return frozenset(
@@ -207,21 +245,54 @@ def _noise_id(prefix: str, *parts: object) -> str:
     return f"{prefix}_{digest[:12].upper()}"
 
 
-def _pick(rng: random.Random, population: Sequence[object], rate: Decimal) -> list[int]:
+def _pick(
+    rng: random.Random,
+    population: Sequence[object],
+    rate: Decimal,
+    *,
+    minimum: int = 0,
+) -> list[int]:
     """Choose indices at `rate`, resolved in integer basis points, sorted (D4).
 
     Comparing against rng.random() would put a float on a selection path and
     make the chosen set depend on binary rounding near the threshold.
+
+    `minimum` TOP UP the selection when the rate alone produced too few. A
+    batch-grain injector at rate 0.06 over ~39 batches expects 2.3 firings, so
+    whether a category appears at all is decided by a coin flip - and seed 42
+    lost that flip, shipping a dev dataset with no UNEXPLAINED case in it. The
+    engine was to be developed against data missing the taxonomy's hardest
+    category, and nothing said so.
+
+    Topping up is deliberate and stays deterministic: the extra indices are
+    drawn from the same rng, so the result is still a pure function of the seed.
+    A category the evaluation depends on is a REQUIREMENT, not a probability.
     """
+    # A DISABLED injector produces nothing, whatever the minimum says. `minimum`
+    # tops up a rate that is on but unlucky; it does not switch an injector on.
+    # Getting this wrong made `unexplainable` withhold credits during runs that
+    # had set its rate to zero, which put narration-damage tests back in front
+    # of the very circular-evaluation defect they exist to catch.
     if rate <= ZERO or not population:
         return []
     threshold = int((rate * _BASIS).to_integral_value(rounding=ROUND_HALF_UP))
-    return [index for index in range(len(population)) if rng.randrange(_BASIS) < threshold]
+    chosen = {index for index in range(len(population)) if rng.randrange(_BASIS) < threshold}
+    while len(chosen) < min(minimum, len(population)):
+        chosen.add(rng.randrange(len(population)))
+    return sorted(chosen)
 
 
 def _utr_in(narration: str) -> str | None:
+    """The 16-character UTR token in a narration, if one is present.
+
+    `token == token.upper()` rather than `token.isupper()`. A UTR is truncated
+    sha256 hex, so an all-digit one is legal and rare; isupper() is False for a
+    token with no cased characters at all, which made truncate_utr and drop_utr
+    silently skip those rows. Rare enough never to have been observed, which is
+    exactly why it needed finding by reading rather than by running.
+    """
     for token in narration.split():
-        if len(token) == 16 and token.isalnum() and token.isupper():
+        if len(token) == 16 and token.isalnum() and token == token.upper():
             return token
     return None
 
@@ -309,6 +380,7 @@ def truncate_utr(
                 utr_to_batch[utr],
                 VarianceCategory.UTR_TRUNCATED_MAPPING,
                 resolvable=shared == 1,
+                amount=ZERO,  # the link is obscured; the money is untouched
                 detail=(
                     f"narration keeps {keep} of 16 UTR chars; {shared} batch(es) share the prefix"
                 ),
@@ -347,6 +419,7 @@ def drop_utr(
                 "batch_link",
                 utr_to_batch[utr],
                 VarianceCategory.UTR_MISSING_MAPPING,
+                amount=ZERO,  # the link is obscured; the money is untouched
                 resolvable=amounts.get(row.amount, 0) == 1,
                 detail=(
                     f"no UTR in narration; {amounts.get(row.amount, 0)} batch(es) share the amount"
@@ -554,6 +627,7 @@ def garbled_narration(
                 utr_to_batch[utr],
                 VarianceCategory.UTR_TRUNCATED_MAPPING,
                 resolvable=True,  # edit distance 2 from the true UTR
+                amount=ZERO,  # the link is obscured; the money is untouched
                 detail=f"UTR characters at {at},{at + 1} transposed",
             )
         )
@@ -617,6 +691,7 @@ def partial_captures(
                 chain.payment.payment_id,
                 VarianceCategory.PARTIAL_CAPTURE,
                 resolvable=True,
+                amount=money(authorized - captured),
                 detail=f"captured {captured} of authorised {authorized}",
             )
         )
@@ -689,6 +764,7 @@ def duplicate_ledger_rows(
                     origin.order_id,
                     VarianceCategory.DUPLICATE_CONFIRMED,
                     resolvable=True,
+                    amount=origin.gross,  # the same money counted twice
                     detail="byte-identical ledger row on a distinct source line",
                 )
             )
@@ -751,6 +827,7 @@ def duplicate_ledger_rows(
                 new_payment_id,
                 VarianceCategory.DUPLICATE_CANDIDATE,
                 resolvable=True,
+                amount=ZERO,  # a real second purchase; nothing is out of balance
                 detail=(
                     f"genuine repeat purchase by {origin.customer_id} for {origin.gross} "
                     f"on {repeat_date.isoformat()}; original order {origin.order_id}"
@@ -831,6 +908,7 @@ def delayed_settlement(
                 line.payment_id,
                 VarianceCategory.T_PLUS_N_TIMING,
                 resolvable=True,
+                amount=ZERO,  # late, not wrong: every rupee arrives, on a later day
                 detail=(
                     f"settled {target_date.isoformat()} in batch {target.batch_id}, "
                     f"{lag} batch(es) after {line.settled_event_date.isoformat()}"
@@ -861,9 +939,12 @@ def split_settlement(
     double-count the denominator and make the match rate depend on how the
     gateway happened to batch the payout.
 
-    gross, fee and tax are split so each part is internally consistent AND the
-    parts sum back exactly. Fee on the second part is the remainder rather than
-    a second rounded product, so no paisa is created or lost.
+    gross is split so the parts sum back to the original exactly. Fee and tax
+    are NOT: each part is priced on its OWN gross via the rate table, so the two
+    fees may total a paisa away from the unsplit fee. That is correct - the
+    gateway charged twice - and it is required, because the engine's arithmetic
+    pass recomputes rate x gross for every line and would reject a fee that was
+    handed to the part as a remainder.
     """
     if profiles is None:
         raise ValueError("split_settlement needs the profile rate table")
@@ -968,6 +1049,7 @@ def split_settlement(
                 line.payment_id,
                 VarianceCategory.SPLIT_SETTLEMENT,
                 resolvable=True,
+                amount=ZERO,  # both parts settle; the money is whole
                 detail=(
                     f"net split {net_a} + {net_b} across batches {line.batch_id} and {next_batch}"
                 ),
@@ -1011,7 +1093,7 @@ def unexplainable(
     annotations: list[NoiseAnnotation] = []
 
     # (a) an orphan bank credit: money arrives that no batch accounts for.
-    for index in _pick(rng, rows.batches, rate):
+    for index in _pick(rng, rows.batches, rate, minimum=_MIN_UNEXPLAINABLE):
         batch = rows.batches[index]
         txn_id = _noise_id("BNK", batch.batch_id, "orphan")
         amount = money(batch.net_total / Decimal(rng.randint(3, 11)))
@@ -1033,6 +1115,7 @@ def unexplainable(
                 txn_id,
                 VarianceCategory.UNEXPLAINED,
                 resolvable=False,
+                amount=amount,  # a credit no batch explains
                 detail=f"orphan_credit {amount} with no settlement behind it",
             )
         )
@@ -1040,7 +1123,7 @@ def unexplainable(
     # (b) a batch whose bank credit never arrives.
     txn_to_batch = {bank_txn_id_for(b.batch_id): b.batch_id for b in rows.batches}
     survivors: list[BankRow] = []
-    withheld = set(_pick(rng, bank, rate))
+    withheld = set(_pick(rng, bank, rate, minimum=_MIN_UNEXPLAINABLE))
     for index, row in enumerate(bank):
         batch_id = txn_to_batch.get(row.bank_txn_id)
         if index in withheld and batch_id is not None:
@@ -1051,6 +1134,7 @@ def unexplainable(
                     batch_id,
                     VarianceCategory.MISSING_VS_LATE_CREDIT,
                     resolvable=False,
+                    amount=row.amount,  # the whole payout never landed
                     detail=f"missing_credit {row.amount} never arrives for batch {batch_id}",
                 )
             )
@@ -1060,6 +1144,63 @@ def unexplainable(
     return NoiseResult(
         _sorted_dataset(replace(rows, bank_rows=tuple(survivors))), tuple(annotations)
     )
+
+
+def rounding_residual(
+    rows: CleanDataset,
+    rng: random.Random,
+    rate: Decimal,
+    *,
+    profiles: Mapping[str, MerchantProfile] | None = None,
+) -> NoiseResult:
+    """Credit a batch a few paise off its total - the residual P9 exists to absorb.
+
+    SDD 4.2 defines pass P9: anything still unmatched with a residual of at most
+    Rs 1.00 is a ROUNDING_DIFFERENCE. Until now NO injector produced one, so P9
+    was unreachable and the category could be neither got right nor got wrong.
+    An unscoreable category is not a lenient test, it is an absent one - and it
+    silently shrinks the taxonomy the headline number claims to cover.
+
+    Real settlement files differ from their own totals by paise, for reasons as
+    dull as a gateway rounding each line and the bank rounding the sum. The
+    engine must absorb that without raising an exception, and must NOT absorb a
+    rupee, so the residual is bounded strictly below Rs 1.00.
+
+    Conservation-breaking, like `unexplainable`, but bounded and annotated: the
+    self-check predicts the exact total in advance and fails if the data
+    disagrees by a paisa.
+
+    Runs LAST, after `unexplainable`. Adjusting a credit that is then withheld
+    would leave truth claiming a residual on a row that no longer exists.
+    """
+    del profiles  # priced from the batch total; the rate table is not needed
+    bank = list(rows.bank_rows)
+    txn_to_batch = {bank_txn_id_for(b.batch_id): b.batch_id for b in rows.batches}
+    annotations: list[NoiseAnnotation] = []
+
+    eligible = [index for index, row in enumerate(bank) if row.bank_txn_id in txn_to_batch]
+    for pick in _pick(rng, eligible, rate, minimum=_MIN_ROUNDING):
+        index = eligible[pick]
+        row = bank[index]
+        # 1..99 paise, signed. Never 0 (that is not a residual) and never 100
+        # (that is a rupee, which P9 must NOT absorb).
+        paise = rng.randint(1, 99)
+        delta = money(Decimal(paise if rng.randrange(2) else -paise) / 100)
+        if row.amount + delta <= ZERO:
+            continue
+        bank[index] = replace(row, amount=money(row.amount + delta))
+        annotations.append(
+            NoiseAnnotation(
+                "rounding_residual",
+                "batch_link",
+                txn_to_batch[row.bank_txn_id],
+                VarianceCategory.ROUNDING_DIFFERENCE,
+                resolvable=True,  # deterministic: P9 absorbs it by rule
+                amount=delta,
+                detail=f"rounding_residual {delta} on credit {row.bank_txn_id}",
+            )
+        )
+    return NoiseResult(replace(rows, bank_rows=tuple(bank)), tuple(annotations))
 
 
 # ---------------------------------------------------------------------------
@@ -1097,13 +1238,16 @@ NOISE_REGISTRY: Final[Mapping[str, tuple[NoiseFn, bool]]] = {
     "delayed_settlement": (delayed_settlement, False),
     "out_of_order_arrival": (out_of_order_arrival, False),
     "unexplainable": (unexplainable, False),
+    "rounding_residual": (rounding_residual, False),
     "garbled_narration": (garbled_narration, True),
     "split_settlement": (split_settlement, True),
 }
 
 # Order is not cosmetic. Structural injectors run before presentation ones so
-# re-summing sees final amounts, and `unexplainable` runs LAST because it is the
-# only one permitted to leave conservation broken.
+# re-summing sees final amounts, and the two conservation-breaking injectors run
+# LAST. `rounding_residual` runs after `unexplainable`, not before: adjusting a
+# credit that is then withheld would leave truth claiming a residual on a row
+# that no longer exists.
 NOISE_ORDER: Final[tuple[str, ...]] = (
     "partial_captures",
     "duplicate_ledger_rows",
@@ -1116,6 +1260,7 @@ NOISE_ORDER: Final[tuple[str, ...]] = (
     "mixed_amount_formats",
     "out_of_order_arrival",
     "unexplainable",
+    "rounding_residual",
 )
 
 _GST: Final[Decimal] = Decimal("0.18")

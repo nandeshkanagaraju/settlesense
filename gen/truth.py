@@ -58,6 +58,9 @@ __all__ = [
 ]
 
 ZERO: Final[Decimal] = Decimal("0.00")
+# SDD 4.2 P9 absorbs a residual of at most Rs 1.00. A residual AT one rupee is
+# not rounding, it is an error, so the bound is strict.
+ONE_RUPEE: Final[Decimal] = Decimal("1.00")
 
 
 class EdgeType(StrEnum):
@@ -146,6 +149,10 @@ class TruthBatchLink:
     bank_txn_id: str | None  # None means the credit never arrived
     net_total: Decimal
     true_category: VarianceCategory | None
+    # The money out of balance on THIS LINK, recorded by the injector. Distinct
+    # from net_total, which is the link's money BASIS (SDD 3.1). A truncated UTR
+    # obscures a link worth net_total and has a variance of zero.
+    true_variance_amount: Decimal
     resolvable_in_principle: bool
     noise_types: tuple[str, ...]
 
@@ -164,6 +171,11 @@ class TruthRowVariance:
     row_id: str
     row_kind: str  # ledger_row | bank_row
     true_category: VarianceCategory
+    # A variance, never a basis. A duplicate ledger row's gross is the same
+    # money counted twice, so it is the AMOUNT OUT OF BALANCE and belongs here -
+    # but it must never be summed as exposure, which is why this population
+    # carries no expected_gross or net_total of its own.
+    true_variance_amount: Decimal
     resolvable_in_principle: bool
     noise_type: str
     detail: str
@@ -353,7 +365,12 @@ def build_truth(
                 # A clean chain lands exactly what it expects, so there is no
                 # variance and no category. Noise is what populates these.
                 true_category=dominant_category(case_noise),
-                true_variance_amount=ZERO,
+                # SUMMED from what the injectors recorded doing. Previously
+                # hardcoded to ZERO, which published a measured-looking figure
+                # that was wrong for every case carrying a variance - and made
+                # every money-weighted metric agree with a number nobody had
+                # computed.
+                true_variance_amount=_variance_of(case_noise),
                 resolvable_in_principle=all(a.resolvable for a in case_noise),
                 noise_type=(
                     sorted(case_noise, key=_noise_rank)[0].noise_type if case_noise else None
@@ -374,6 +391,7 @@ def build_truth(
                 bank_txn_id=row.bank_txn_id if row is not None else None,
                 net_total=batch.net_total,
                 true_category=dominant_category(link_noise),
+                true_variance_amount=_variance_of(link_noise),
                 resolvable_in_principle=all(a.resolvable for a in link_noise),
                 noise_types=tuple(sorted({a.noise_type for a in link_noise})),
             )
@@ -387,6 +405,7 @@ def build_truth(
                     row_id=a.target_id,
                     row_kind=a.target_kind,
                     true_category=a.category,
+                    true_variance_amount=a.amount,
                     resolvable_in_principle=a.resolvable,
                     noise_type=a.noise_type,
                     detail=a.detail,
@@ -410,6 +429,21 @@ def build_truth(
         seed=seed,
         generator_commit=None,
     )
+
+
+def _variance_of(annotations: Sequence[NoiseAnnotation]) -> Decimal:
+    """The money out of balance at one grain, summed from the injectors' record.
+
+    Read, never re-derived. Each injector is the only thing that knows what it
+    moved; reconstructing the figure from the finished dataset would be guessing
+    from the result, the same mistake as recovering a batch->bank link by
+    parsing the narration.
+
+    Presentation noise contributes exactly ZERO rather than nothing: a truncated
+    UTR obscures a link without moving a rupee, and that is a measured zero, not
+    an absent value.
+    """
+    return money(sum((a.amount for a in annotations), start=ZERO))
 
 
 def _noise_rank(annotation: NoiseAnnotation) -> tuple[int, str]:
@@ -537,6 +571,10 @@ def run_self_check(
     orphan_credits = noise.orphan_bank_txn_ids() if noise else frozenset()
     unbanked = noise.unbanked_batch_ids() if noise else frozenset()
     dup_confirmed = noise.duplicate_confirmed_order_ids() if noise else frozenset()
+    rounding_by_batch: dict[str, Decimal] = {}
+    for annotation in noise.annotations if noise else ():
+        if annotation.noise_type == "rounding_residual":
+            rounding_by_batch[annotation.target_id] = annotation.amount
     split_payments = noise.split_payment_ids() if noise else frozenset()
 
     lines_by_batch: dict[str, list[Any]] = {}
@@ -617,10 +655,24 @@ def run_self_check(
         if linked_batch is None or linked_row is None:
             problems.append(f"BATCH_TO_BANK {edge.src_id}->{edge.dst_id}: endpoint missing")
             continue
-        if linked_row.amount != linked_batch.net_total:
+        # SDD 3.1a: the credit equals the batch total EXACTLY - unless a
+        # rounding residual was injected against this specific batch, and then
+        # only by the annotated amount and only below Rs 1.00. Checked against
+        # what the injector recorded, not against a blanket tolerance: a
+        # tolerance would also swallow a genuine one-paisa generator bug, which
+        # is precisely the class of defect this file exists to catch.
+        allowed = rounding_by_batch.get(linked_batch.batch_id, ZERO)
+        difference = money(linked_row.amount - linked_batch.net_total)
+        if difference != allowed:
             problems.append(
                 f"bank {linked_row.bank_txn_id} credits {linked_row.amount} but batch "
-                f"{linked_batch.batch_id} nets {linked_batch.net_total}"
+                f"{linked_batch.batch_id} nets {linked_batch.net_total} "
+                f"(difference {difference}, annotated {allowed})"
+            )
+        elif abs(difference) >= ONE_RUPEE:
+            problems.append(
+                f"rounding residual {difference} on batch {linked_batch.batch_id} is "
+                f"not sub-rupee; P9 must not absorb a whole rupee (SDD 4.2)"
             )
         members = lines_by_batch.get(linked_batch.batch_id, [])
         if any(line.line_type is SettlementLineType.REFUND for line in members):
@@ -767,12 +819,15 @@ def run_self_check(
     missing_total = money(
         sum((b.net_total for b in dataset.batches if b.batch_id in unbanked), start=ZERO)
     )
-    predicted_bank = money(sum_batch + orphan_total - missing_total)
+    # The third licensed break: sub-rupee residuals on surviving credits, which
+    # pass P9 exists to absorb (SDD 4.2). Signed, and predicted to the paisa.
+    rounding_total = noise.rounding_residual_total() if noise else ZERO
+    predicted_bank = money(sum_batch + orphan_total - missing_total + rounding_total)
     if sum_bank != predicted_bank:
         problems.append(
             f"batch-side conservation: bank {sum_bank} != batches {sum_batch} "
             f"+ orphan credits {orphan_total} - withheld credits {missing_total} "
-            f"= {predicted_bank}"
+            f"+ rounding residuals {rounding_total} = {predicted_bank}"
         )
     if sum_net != sum_lines:
         problems.append(f"the two sides disagree: case net {sum_net} != line total {sum_lines}")
@@ -899,6 +954,7 @@ def truth_to_dict(truth: Truth) -> dict[str, Any]:
                 "bank_txn_id": link.bank_txn_id,
                 "net_total": _money_str(link.net_total),
                 "true_category": link.true_category.value if link.true_category else None,
+                "true_variance_amount": _money_str(link.true_variance_amount),
                 "resolvable_in_principle": link.resolvable_in_principle,
                 "noise_types": list(link.noise_types),
             }
@@ -910,6 +966,7 @@ def truth_to_dict(truth: Truth) -> dict[str, Any]:
                 "row_id": row.row_id,
                 "row_kind": row.row_kind,
                 "true_category": row.true_category.value,
+                "true_variance_amount": _money_str(row.true_variance_amount),
                 "resolvable_in_principle": row.resolvable_in_principle,
                 "noise_type": row.noise_type,
                 "detail": row.detail,
