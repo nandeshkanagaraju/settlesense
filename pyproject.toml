@@ -1,0 +1,96 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "settlesense"
+version = "0.1.0"
+description = "A verified settlement-reconciliation agent: deterministic where it can be, constrained AI only where the evidence justifies it."
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+    "pytest",
+    "pytest-cov",
+    "hypothesis",
+    "pyyaml",
+    "python-Levenshtein",
+    "streamlit",
+    "lxml",
+    "anthropic",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "mypy",
+]
+
+[tool.setuptools.packages.find]
+# Explicit include list: subpackages must be captured too (settlesense.matching,
+# settlesense.ai, eval.baselines, ...), and neither tests/ nor fixtures/ ships.
+include = ["settlesense*", "gen*", "eval*"]
+exclude = ["tests*", "fixtures*", "data*", "reports*"]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+# --strict-markers so a typo'd marker fails loudly rather than silently
+# selecting nothing - `make check` runs `-m determinism`, and a marker typo
+# there would report success having run no guard at all.
+# -q is NOT set here: the Makefile passes it, and setting it in both places
+# means `pytest -v` silently stays quiet.
+addopts = "--strict-markers --strict-config"
+markers = [
+    "golden: byte-compares full pipeline output against a committed golden file",
+    "determinism: a D1-D13 charter guard test",
+]
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Markdown is EXCLUDED deliberately. Recent ruff formats Python code blocks
+# inside .md files, which would rewrite the PDD and SDD - the specification
+# this project is measured against. A formatter must never edit the spec.
+extend-exclude = ["*.md", ".venv", "data", "reports", "fixtures"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # import sorting - deterministic import order
+    "B",    # bugbear
+    "UP",   # pyupgrade
+    "SIM",  # simplify
+    "DTZ",  # flake8-datetimez: catches naive datetime use, supports D2
+    "RUF",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Stub modules are docstring-only until their gate.
+"settlesense/**/__init__.py" = ["F401"]
+"gen/__init__.py" = ["F401"]
+"eval/**/__init__.py" = ["F401"]
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+# Type hints are required on every public function (project standing rule),
+# so an untyped def is an error rather than a warning.
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = ["Levenshtein.*", "streamlit.*", "yaml.*"]
+ignore_missing_imports = true

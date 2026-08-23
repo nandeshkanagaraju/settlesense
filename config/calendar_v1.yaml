@@ -1,0 +1,53 @@
+# SettleSense - working-day calendar, version calendar_v1.
+#
+# The version string below is recorded in every ReconciliationResult
+# (SDD 8.1, ReconciliationResult.calendar_version).
+#
+# D13: every date in this file is in 2026. A date outside 2026 is a defect
+#      and the loader raises on one.
+#
+# SYNTHETIC HOLIDAY SET - READ THIS BEFORE COPYING IT ANYWHERE.
+# The eight dates below are INVENTED for the 2026 simulated timeline.
+# They are NOT the RBI bank-holiday schedule and make no claim to be.
+# The evaluation measures whether the engine handles a holiday correctly,
+# not whether it knows India's actual holiday list. Swapping in real dates
+# is a config change requiring no code change. See LIMITATIONS.md.
+
+version: calendar_v1
+timezone: Asia/Kolkata
+
+# Weekly non-working days. Per-profile override is permitted via
+# profiles.<name>.weekly_offs; absent means "use this global list".
+weekly_offs:
+  - saturday
+  - sunday
+
+# Eight synthetic holidays inside the simulated window 2026-09-01 .. 2026-11-30.
+# All fall on weekdays - a holiday landing on an existing weekly off would
+# exercise nothing. 2026-11-02 is deliberately a Monday, so Sat 31 Oct,
+# Sun 01 Nov and Mon 02 Nov form a three-day non-working run: the adversarial
+# case for T+N roll-forward.
+holidays:
+  - "2026-09-07" # Monday
+  - "2026-09-17" # Thursday
+  - "2026-10-02" # Friday
+  - "2026-10-20" # Tuesday
+  - "2026-11-02" # Monday   - see three-day run above
+  - "2026-11-11" # Wednesday
+  - "2026-11-19" # Thursday
+  - "2026-11-26" # Thursday
+
+# The window the simulated timeline is generated inside. The loader asserts
+# every holiday falls within it, so a stray date cannot sit unnoticed.
+simulation_window:
+  start: "2026-09-01"
+  end: "2026-11-30"
+
+# Settlement cycle per merchant profile, in WORKING days.
+# T+N counts working days forward from the capture event_date, skipping
+# weekly_offs and holidays. These are integers, not Decimals: a settlement
+# cycle is a count of days, never a ratio (D12 applies to ratios).
+settlement_cycles:
+  profile_a: 2 # T+2
+  profile_b: 1 # T+1
+  profile_c: 3 # T+3

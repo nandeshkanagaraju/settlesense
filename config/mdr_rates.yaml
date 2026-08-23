@@ -1,0 +1,34 @@
+# SettleSense - MDR fee rates per merchant profile, per payment method.
+#
+# D12: every rate is a QUOTED STRING, coerced to Decimal by load_config().
+# An unquoted numeric here parses as a YAML float and the loader RAISES.
+#
+# Rates are fractions of gross, not percentages: "0.0200" is 2.00%.
+# fee = round(gross * rate[method], 2)   ROUND_HALF_UP
+# gst = round(fee * gst_rate, 2)         ROUND_HALF_UP
+
+version: mdr_rates_v1
+
+gst_rate: "0.1800" # 18% GST on the MDR fee. Applies to all profiles.
+
+profiles:
+  profile_a:
+    methods:
+      card: "0.0200" # 2.00%
+      upi: "0.0000" # 0.00%
+      netbanking: "0.0175" # 1.75%
+      wallet: "0.0210" # 2.10%
+
+  profile_b:
+    methods:
+      card: "0.0235" # 2.35%
+      upi: "0.0000" # 0.00%
+      netbanking: "0.0190" # 1.90%
+      wallet: "0.0200" # 2.00%
+
+  profile_c:
+    methods:
+      card: "0.0180" # 1.80%
+      upi: "0.0000" # 0.00%
+      netbanking: "0.0160" # 1.60%
+      wallet: "0.0195" # 1.95%

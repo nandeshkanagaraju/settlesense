@@ -1,0 +1,82 @@
+# SettleSense - abstention, scoring and safety thresholds.
+#
+# D12: EVERY decimal-valued entry is a QUOTED STRING, coerced to Decimal by
+#      load_config(). An unquoted decimal parses as a YAML float and the
+#      loader RAISES with the offending key path. Integers are permitted only
+#      where the value is genuinely a count (retries, hypothesis cap, minutes),
+#      never where it is a weight, ratio, rate or money amount.
+#
+# No magic numbers in code. Every number the engine compares against is here.
+
+version: thresholds_v1
+
+# --- Fuzzy UTR scoring (SDD 4.3) -------------------------------------------
+# score = W_PREFIX * prefix_ratio
+#       + W_EDIT   * (1 - edit_ratio)
+#       + W_AMOUNT * amount_exact
+# Each ratio is an exact Decimal division quantized to score_quantum.
+# The loader asserts these three weights sum to exactly 1.
+fuzzy_utr:
+  weight_prefix: "0.50"
+  weight_edit: "0.30"
+  weight_amount: "0.20"
+  score_quantum: "0.000001" # Q6 - 6 dp, per SDD 4.3
+  # Accept ONLY if best >= accept_score AND (best - runner_up) >= min_separation.
+  # Failing either emits UTR_TRUNCATED_MAPPING into the residual set with all
+  # candidates attached. Never accept on score alone when two candidates are
+  # close - that ambiguity is precisely what the AI layer exists to examine.
+  accept_score: "0.85"
+  min_separation: "0.15"
+
+# --- Arithmetic tolerance (SDD 4.2 P9) -------------------------------------
+tolerance:
+  # P9 rounding: a residual at or below this, after every other component,
+  # is ROUNDING_DIFFERENCE. Money, so 2 dp.
+  rounding_rupees: "1.00"
+  # The verifier's tolerance when recomputing a hypothesis assertion (SDD 4.5).
+  # Held equal to the rounding tolerance in v1; separated so tightening the
+  # verifier does not silently reclassify rounding differences.
+  verifier_rupees: "1.00"
+
+# --- Confidence (SDD 4.6) ---------------------------------------------------
+# confidence = w_verification_passed     * verification_passed
+#            + w_residual_within_tol     * (1 if |residual| <= tolerance else 0)
+#            + w_evidence_completeness   * evidence_completeness_ratio
+#            + w_candidate_separation    * clip(best - runner_up, 0, 1)
+#            + w_freshness               * freshness_ok
+# Confidence is computed by the verification layer. It is NEVER the model's
+# self-report. The loader asserts these five weights sum to exactly 1.
+confidence:
+  weight_verification_passed: "0.40"
+  weight_residual_within_tolerance: "0.20"
+  weight_evidence_completeness: "0.20"
+  weight_candidate_separation: "0.15"
+  weight_freshness: "0.05"
+  # Auto-confirm requires confidence >= auto_confirm AND verification_passed.
+  # Confidence alone can never confirm.
+  auto_confirm: "0.80"
+
+# --- Hypothesis loop (SDD 4.4, 4.8) ----------------------------------------
+hypothesis:
+  max_per_exception: 3 # int: a count of hypotheses, ranked, first pass wins
+  llm_max_retries: 2 # int: after this, residuals -> PENDING_AI_UNAVAILABLE
+
+# --- Pre-declared safety budgets (PDD 7.3) ---------------------------------
+# AI-assisted automatic confirmation is enabled PER CATEGORY only if, on the
+# held-out set, it improves useful residual coverage or explanation precision
+# AND stays inside every budget below. Fail any one -> that category stays
+# deterministic-only or human-review-only.
+#
+# These are project safety thresholds for a synthetic evaluation. They are NOT
+# a claim about acceptable production loss. Real deployment would require
+# risk, compliance and business-owner sign-off on all three.
+safety_budgets:
+  max_residual_false_match_rate: "0.01" # < 1% of confirmations
+  max_gross_exposure_false_match_rupees: "500.00" # per evaluation run, basis: expected gross
+  max_cost_per_1000_rows_rupees: "50.00" # model cost ceiling
+
+# --- Reporting assumptions (PDD 8.4) ---------------------------------------
+# "Analyst minutes saved" is a DERIVED ESTIMATE, not a measurement. The
+# assumption lives here so the README can state it and a reader can rescale it.
+reporting:
+  assumed_review_minutes_per_exception: 4 # int: minutes, an assumption not a finding
