@@ -1,0 +1,3 @@
+settlement_id,batch_id,line_type,payment_id,refund_id,gross,fee,tax,net,settled_event_date
+SET_65C834D66DA3,BAT_E761845A2961,payment,PAY_5A3C4170A59C,,3701.30,70.32,12.66,3618.32,2026-09-11
+SET_6D3A837D42B8,BAT_4CBB55577DDC,payment,PAY_F5F836B19644,,5132.14,102.64,18.48,5011.02,2026-09-11

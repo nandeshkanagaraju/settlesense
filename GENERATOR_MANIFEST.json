@@ -7,22 +7,26 @@
     "batch_to_bank",
     "payment_to_refund"
   ],
+  "freeze_generation": 2,
   "frozen_at_gate": "M1F",
   "gen_files": {
     "gen/README.md": "9ef0262a5f0a0487",
     "gen/__init__.py": "e3b0c44298fc1c14",
     "gen/generate.py": "5e6170fa84d9f815",
     "gen/lifecycle.py": "33d3d4d289a07a1c",
-    "gen/noise.py": "832215edadbf2651",
+    "gen/noise.py": "ae8e8a15e7e3f581",
     "gen/profiles.py": "3bb501c469cfd87e",
-    "gen/truth.py": "92128fffdfdf4519"
+    "gen/truth.py": "0e7d4e52f6bb1723"
   },
-  "gen_tree_sha256": "866cbddf91a5ebc3101e9014a7fd6b8bc22da53414d44cd3ac7dfc22d858cf2e",
-  "generator_commit": "fda19c6eb341d49380d7d7d254e76d053df2f4a2",
+  "gen_tree_sha256": "2ba97ef83bbc5d0743cd98a1422b3c1ae03f5119147ec056e4aab01250f891a7",
+  "generator_commit": "eac3ca37444a4e9b469b49536aff739152ff4b32",
+  "noise_type_count": 12,
   "seeds": {
     "dev": 42,
     "holdout": 999
   },
+  "supersedes": "6ff7172",
+  "supersedes_reason": "Re-frozen once, before any engine code existed, to correct six dataset defects found by the M1 guard suite. No engine had been run against the superseded dataset. See LIMITATIONS.md.",
   "table_count": 6,
   "tables": [
     "ledger_rows",

@@ -1,0 +1,324 @@
+{
+  "base_date": "2026-09-01",
+  "calendar_version": "calendar_v1",
+  "capture_days": 20,
+  "counts": {
+    "bank_rows": 41,
+    "batches": 39,
+    "chains": 5027,
+    "ledger_rows": 5050,
+    "payment_rows": 5027,
+    "refund_rows": 318,
+    "settlement_lines": 5399
+  },
+  "day_count": 24,
+  "days": [
+    {
+      "arrival_day": 1,
+      "file_content_date": "2026-09-01",
+      "rows": {
+        "bank": 0,
+        "batches": 3,
+        "ledger": 252,
+        "payments": 251,
+        "refunds": 6,
+        "settlements": 246
+      }
+    },
+    {
+      "arrival_day": 2,
+      "file_content_date": "2026-09-02",
+      "rows": {
+        "bank": 1,
+        "batches": 3,
+        "ledger": 251,
+        "payments": 250,
+        "refunds": 15,
+        "settlements": 258
+      }
+    },
+    {
+      "arrival_day": 3,
+      "file_content_date": "2026-09-03",
+      "rows": {
+        "bank": 2,
+        "batches": 3,
+        "ledger": 254,
+        "payments": 253,
+        "refunds": 10,
+        "settlements": 265
+      }
+    },
+    {
+      "arrival_day": 4,
+      "file_content_date": "2026-09-04",
+      "rows": {
+        "bank": 2,
+        "batches": 3,
+        "ledger": 254,
+        "payments": 251,
+        "refunds": 18,
+        "settlements": 271
+      }
+    },
+    {
+      "arrival_day": 5,
+      "file_content_date": "2026-09-05",
+      "rows": {
+        "bank": 1,
+        "batches": 0,
+        "ledger": 254,
+        "payments": 254,
+        "refunds": 17,
+        "settlements": 11
+      }
+    },
+    {
+      "arrival_day": 6,
+      "file_content_date": "2026-09-06",
+      "rows": {
+        "bank": 0,
+        "batches": 0,
+        "ledger": 251,
+        "payments": 251,
+        "refunds": 15,
+        "settlements": 4
+      }
+    },
+    {
+      "arrival_day": 7,
+      "file_content_date": "2026-09-07",
+      "rows": {
+        "bank": 0,
+        "batches": 0,
+        "ledger": 253,
+        "payments": 253,
+        "refunds": 13,
+        "settlements": 0
+      }
+    },
+    {
+      "arrival_day": 8,
+      "file_content_date": "2026-09-08",
+      "rows": {
+        "bank": 3,
+        "batches": 3,
+        "ledger": 253,
+        "payments": 253,
+        "refunds": 13,
+        "settlements": 1028
+      }
+    },
+    {
+      "arrival_day": 9,
+      "file_content_date": "2026-09-09",
+      "rows": {
+        "bank": 3,
+        "batches": 3,
+        "ledger": 255,
+        "payments": 251,
+        "refunds": 21,
+        "settlements": 303
+      }
+    },
+    {
+      "arrival_day": 10,
+      "file_content_date": "2026-09-10",
+      "rows": {
+        "bank": 3,
+        "batches": 3,
+        "ledger": 250,
+        "payments": 250,
+        "refunds": 10,
+        "settlements": 284
+      }
+    },
+    {
+      "arrival_day": 11,
+      "file_content_date": "2026-09-11",
+      "rows": {
+        "bank": 3,
+        "batches": 3,
+        "ledger": 251,
+        "payments": 251,
+        "refunds": 12,
+        "settlements": 262
+      }
+    },
+    {
+      "arrival_day": 12,
+      "file_content_date": "2026-09-12",
+      "rows": {
+        "bank": 0,
+        "batches": 0,
+        "ledger": 254,
+        "payments": 253,
+        "refunds": 20,
+        "settlements": 10
+      }
+    },
+    {
+      "arrival_day": 13,
+      "file_content_date": "2026-09-13",
+      "rows": {
+        "bank": 0,
+        "batches": 0,
+        "ledger": 251,
+        "payments": 250,
+        "refunds": 18,
+        "settlements": 2
+      }
+    },
+    {
+      "arrival_day": 14,
+      "file_content_date": "2026-09-14",
+      "rows": {
+        "bank": 4,
+        "batches": 3,
+        "ledger": 255,
+        "payments": 251,
+        "refunds": 15,
+        "settlements": 771
+      }
+    },
+    {
+      "arrival_day": 15,
+      "file_content_date": "2026-09-15",
+      "rows": {
+        "bank": 4,
+        "batches": 3,
+        "ledger": 250,
+        "payments": 250,
+        "refunds": 15,
+        "settlements": 290
+      }
+    },
+    {
+      "arrival_day": 16,
+      "file_content_date": "2026-09-16",
+      "rows": {
+        "bank": 2,
+        "batches": 3,
+        "ledger": 255,
+        "payments": 251,
+        "refunds": 14,
+        "settlements": 280
+      }
+    },
+    {
+      "arrival_day": 17,
+      "file_content_date": "2026-09-17",
+      "rows": {
+        "bank": 0,
+        "batches": 0,
+        "ledger": 252,
+        "payments": 251,
+        "refunds": 10,
+        "settlements": 6
+      }
+    },
+    {
+      "arrival_day": 18,
+      "file_content_date": "2026-09-18",
+      "rows": {
+        "bank": 4,
+        "batches": 3,
+        "ledger": 251,
+        "payments": 250,
+        "refunds": 17,
+        "settlements": 514
+      }
+    },
+    {
+      "arrival_day": 19,
+      "file_content_date": "2026-09-19",
+      "rows": {
+        "bank": 0,
+        "batches": 0,
+        "ledger": 252,
+        "payments": 251,
+        "refunds": 17,
+        "settlements": 15
+      }
+    },
+    {
+      "arrival_day": 20,
+      "file_content_date": "2026-09-20",
+      "rows": {
+        "bank": 0,
+        "batches": 0,
+        "ledger": 252,
+        "payments": 252,
+        "refunds": 37,
+        "settlements": 10
+      }
+    },
+    {
+      "arrival_day": 21,
+      "file_content_date": "2026-09-21",
+      "rows": {
+        "bank": 3,
+        "batches": 3,
+        "ledger": 0,
+        "payments": 0,
+        "refunds": 4,
+        "settlements": 554
+      }
+    },
+    {
+      "arrival_day": 22,
+      "file_content_date": "2026-09-22",
+      "rows": {
+        "bank": 3,
+        "batches": 0,
+        "ledger": 0,
+        "payments": 0,
+        "refunds": 1,
+        "settlements": 8
+      }
+    },
+    {
+      "arrival_day": 23,
+      "file_content_date": "2026-09-23",
+      "rows": {
+        "bank": 2,
+        "batches": 0,
+        "ledger": 0,
+        "payments": 0,
+        "refunds": 0,
+        "settlements": 7
+      }
+    },
+    {
+      "arrival_day": 24,
+      "file_content_date": "2026-09-24",
+      "rows": {
+        "bank": 1,
+        "batches": 0,
+        "ledger": 0,
+        "payments": 0,
+        "refunds": 0,
+        "settlements": 0
+      }
+    }
+  ],
+  "generator_commit": null,
+  "include_withheld": true,
+  "noise_counts": {
+    "delayed_settlement": 51,
+    "drop_utr": 4,
+    "duplicate_ledger_rows": 50,
+    "garbled_narration": 1,
+    "merchant_name_variants": 15,
+    "mixed_amount_formats": 1226,
+    "out_of_order_arrival": 204,
+    "partial_captures": 94,
+    "rounding_residual": 4,
+    "split_settlement": 54,
+    "truncate_utr": 14,
+    "unexplainable": 4
+  },
+  "records": 5000,
+  "seed": 999,
+  "truth_file": "truth_999.json"
+}

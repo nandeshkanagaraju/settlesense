@@ -13,6 +13,7 @@ commit and a stated reason, rather than a silent edit.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import pathlib
@@ -131,3 +132,72 @@ def test_truth_files_never_carry_the_commit_hash() -> None:
         payload = json.loads(path.read_text("utf-8"))
         assert payload["generator_commit"] is None, f"{path.name} carries a commit hash"
         assert commit not in path.read_text("utf-8"), f"{path.name} leaks the freeze hash"
+
+
+# ===========================================================================
+# The post-M3 rule: no third freeze once the engine exists
+# ===========================================================================
+
+ENGINE_DIR = REPO_ROOT / "settlesense" / "matching"
+
+
+def _engine_is_implemented() -> bool:
+    """True once settlesense/matching/ holds more than docstring-only stubs.
+
+    Measured by code, not by a date or a flag: a rule keyed on a calendar
+    deadline is one nobody notices passing, and a flag is one that gets set
+    wrong. A module with executable statements in it is the observable fact
+    that M3 has begun.
+    """
+    for path in sorted(ENGINE_DIR.rglob("*.py")):
+        tree = ast.parse(path.read_text("utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+                continue  # module docstring
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            return True
+    return False
+
+
+def test_no_further_re_freeze_once_the_engine_exists() -> None:
+    """LIMITATIONS.md commits to exactly one re-freeze. This is what holds it.
+
+    The generator was re-frozen once, before any engine code existed - a
+    correction that cannot be tuning, because there was nothing to tune against.
+    After M3 begins that reasoning stops applying: a change to the generator can
+    no longer be distinguished from one that flatters a measured result, whatever
+    the intent behind it.
+
+    A rule recorded only in prose is the ceremonial version of the discipline it
+    describes. So it is checked: with the engine implemented, a third freeze
+    generation fails the build and the defect goes in LIMITATIONS.md instead.
+    """
+    generation = _manifest().get("freeze_generation", 1)
+    if not _engine_is_implemented():
+        assert generation <= 2, (
+            f"freeze generation {generation} before the engine exists. Two is "
+            "already the documented maximum; a third needs its own justification "
+            "in LIMITATIONS.md."
+        )
+        return
+    assert generation <= 2, (
+        f"freeze generation {generation} with settlesense/matching/ implemented. "
+        "LIMITATIONS.md commits to no re-freeze after M3 begins: past that point "
+        "a generator correction cannot be distinguished from tuning the data to "
+        "the result. Record the defect in LIMITATIONS.md and live with it."
+    )
+
+
+def test_the_engine_detector_is_honest() -> None:
+    """Guards the guard, in both directions.
+
+    A detector stuck at False would let a third freeze through forever; one
+    stuck at True would fire on the stubs that exist today.
+    """
+    assert ENGINE_DIR.is_dir(), "settlesense/matching/ is missing entirely"
+    assert not _engine_is_implemented(), (
+        "the engine reads as implemented already. If M3 has genuinely started, "
+        "delete this assertion in the same commit that starts it - deliberately, "
+        "so the no-re-freeze rule becomes live rather than silently bypassed."
+    )

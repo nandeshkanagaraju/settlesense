@@ -1,0 +1,1 @@
+settlement_id,batch_id,line_type,payment_id,refund_id,gross,fee,tax,net,settled_event_date
