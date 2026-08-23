@@ -88,8 +88,10 @@ def test_generator_tree_matches_the_frozen_hash() -> None:
 def test_manifest_declares_six_tables_not_seven() -> None:
     """Chargebacks are out of v1 scope, so there is no seventh table (SDD 3.0).
 
-    The SDD's own example manifest in 5.1 says `table_count: 7`, which predates
-    the removal of disputes. Six is correct.
+    Six, and SDD 5.1 now agrees - its example manifest said 7 until revision 2,
+    a leftover from before disputes left v1 scope. That disagreement is resolved;
+    this assertion outlives it because the count must keep matching the files the
+    generator actually writes, not merely the document.
     """
     manifest = _manifest()
     assert manifest["table_count"] == 6

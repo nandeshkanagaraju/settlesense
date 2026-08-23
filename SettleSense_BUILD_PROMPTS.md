@@ -173,7 +173,12 @@ Build Module 1 part B: gen/truth.py.
 Read SDD 3.1 and 3.2 first. Truth is a TYPED EDGE SET, not a flat partner map.
 
 Write truth_<seed>.json containing:
-- edges: a list of TruthEdge {edge_type, src_id, dst_id} using the six EdgeType values
+- edges: a list of TruthEdge {edge_type, src_id, dst_id} using the FIVE EdgeType values
+  (ORDER_TO_PAYMENT, PAYMENT_TO_SETTLEMENT, SETTLEMENT_TO_BATCH, BATCH_TO_BANK,
+   PAYMENT_TO_REFUND). There is no sixth; a dispute edge is out of v1 scope.
+- row_variances: Population C — variances that are neither payment-grain nor
+  batch-grain (DUPLICATE_CONFIRMED ledger rows, orphan bank credits), keyed by
+  source row id. Without this they are dropped from truth and become unscoreable.
 - cases: one entry per ReconciliationCase (one per captured payment) with its true
   variance category (closed taxonomy, PDD section 6), true variance amount, whether it
   is resolvable in principle, and which noise type if any was applied

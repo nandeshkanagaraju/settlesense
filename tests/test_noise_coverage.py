@@ -95,9 +95,14 @@ GRAIN_BOUNDS = {
 
 WITHHELD = {"garbled_narration", "split_settlement"}
 
-# Categories that describe a VARIANCE - something the engine must explain.
-# Every one of these must occur or it cannot be scored.
+# The taxonomy split now lives where PDD 6.1 says it does:
+# settlesense.exceptions.taxonomy.VARIANCE_CATEGORIES. These local sets are a
+# HAND RESTATEMENT of it, kept for the same reason the rates are restated -
+# importing the engine's answer and then asserting against it would let a wrong
+# classification agree with itself. test_the_restatement_matches_the_taxonomy
+# below is where the two independent statements are made to meet.
 VARIANCE_CATEGORIES = {
+    VarianceCategory.ROUNDING_DIFFERENCE,
     VarianceCategory.DUPLICATE_CONFIRMED,
     VarianceCategory.T_PLUS_N_TIMING,
     VarianceCategory.PARTIAL_CAPTURE,
@@ -107,12 +112,12 @@ VARIANCE_CATEGORIES = {
     VarianceCategory.SPLIT_SETTLEMENT,
     VarianceCategory.MISSING_VS_LATE_CREDIT,
     VarianceCategory.UNEXPLAINED,
-    VarianceCategory.ROUNDING_DIFFERENCE,
 }
 
-# Categories that are DEDUCTIONS, not variances: a clean card payment deducts
-# MDR_FEE and GST_ON_FEE and has no variance at all (TruthCase docstring, SDD
-# 3.1b). They are checked against `deduction_categories`, never `true_category`.
+# Components of expected_net (PDD 6.1). Computed on EVERY case and never emitted
+# as a variance, so a coverage assertion that sweeps them demands the generator
+# invent a variance out of a fee. Checked against `deduction_categories`, never
+# against `true_category`.
 DEDUCTION_CATEGORIES = {
     VarianceCategory.MDR_FEE,
     VarianceCategory.GST_ON_FEE,
@@ -363,6 +368,30 @@ def test_deduction_categories_are_recorded_separately(holdout_truth: dict[str, A
     variances = _categories(holdout_truth)
     leaked = sorted(c.value for c in DEDUCTION_CATEGORIES if c.value in variances)
     assert not leaked, f"deduction categories leaked into true_category: {leaked}"
+
+
+def test_the_restatement_matches_the_engine_taxonomy() -> None:
+    """gen-side restatement vs settlesense.exceptions.taxonomy (PDD 6.1).
+
+    Two independent statements of the same classification, made to meet in
+    exactly one place. If they disagree, one of them is wrong and every coverage
+    assertion built on the wrong one has been sweeping the wrong set - silently,
+    and in the flattering direction if a hard category was dropped.
+    """
+    from settlesense.exceptions.taxonomy import (
+        DEDUCTION_CATEGORIES as ENGINE_DEDUCTIONS,
+    )
+    from settlesense.exceptions.taxonomy import (
+        VARIANCE_CATEGORIES as ENGINE_VARIANCES,
+    )
+
+    assert {c.value for c in VARIANCE_CATEGORIES} == {c.value for c in ENGINE_VARIANCES}, (
+        "the restated variance set disagrees with taxonomy.VARIANCE_CATEGORIES: "
+        f"{ {c.value for c in VARIANCE_CATEGORIES} ^ {c.value for c in ENGINE_VARIANCES} }"
+    )
+    assert {c.value for c in DEDUCTION_CATEGORIES} == {c.value for c in ENGINE_DEDUCTIONS}, (
+        "the restated deduction set disagrees with taxonomy.DEDUCTION_CATEGORIES"
+    )
 
 
 def test_the_taxonomy_is_fully_partitioned() -> None:

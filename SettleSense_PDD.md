@@ -105,6 +105,8 @@ The taxonomy is **closed**. The model may only emit a category from this list.
 | `REFUND_OFFSET` | Exact-amount refund matched to a known `refund_id` |
 | `PARTIAL_CAPTURE` | Captured amount < authorised amount, both known |
 
+> **Deduction categories are not variance categories.** `MDR_FEE`, `GST_ON_FEE` and `REFUND_OFFSET` describe *components of `expected_net`*, not unexplained differences. They are computed on every case and are never emitted as a variance. A coverage assertion of the form "every taxonomy category appears in truth" is therefore wrong. Coverage is asserted over **variance-producing categories only**, enumerated explicitly as `taxonomy.VARIANCE_CATEGORIES`.
+
 ### 6.2 Genuinely interpretive — eligible for the AI layer
 
 | Category | Why rules may struggle |

@@ -7,13 +7,18 @@ link. Both carry a true category the eval has to score, and before
 warning, simply absent. Unscoreable truth is the quietest possible failure: the
 denominator shrinks, every rate goes up, and nothing anywhere says so.
 
-SPEC NOTE. SDD 3.1 declares exactly TWO populations and `ReconciliationResult`
-(SDD 8.1) has exactly two fields. This third grain is a deviation from the
-frozen spec, introduced because the data demanded it. These tests pin the
-behaviour; whether the SDD is amended or the deviation is recorded in
-LIMITATIONS.md is not a decision a test can make. The tests below deliberately
-do NOT assert that a third population is authorised - only that, given it
-exists, nothing falls between the three.
+SPECIFIED, NOT A DEVIATION. SDD 3.1 defines Population C directly: variances
+whose subject is neither a payment nor a batch, recorded in `truth.row_variances`
+keyed by source row id, reported with a ROW-COUNT denominator and never merged
+into A or B. `ReconciliationResult.row_variances` (SDD 8.1) is its reporting
+field, typed `tuple[RowVarianceOutcome, ...]` and sorted by row_id.
+
+An earlier revision of this file called Population C a deviation from the frozen
+spec. That was wrong, and wrong in an instructive way: the repository's copy of
+the SDD had fallen behind the authoritative revision, so a correct implementation
+read as an invention. tests/test_spec_present.py now hashes all three documents
+and resolves every section citation against them, so a stale copy fails loudly
+rather than turning agreement into a reported conflict.
 
 Requirement 5 is the one with a future in it. Counts drift with seeds; the
 completeness rule does not. It says every categorised variance lands in exactly

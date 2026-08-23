@@ -279,9 +279,9 @@ def _tables_on_disk(root: pathlib.Path) -> set[str]:
 def test_manifest_table_count_is_six_not_seven() -> None:
     manifest = _manifest()
     assert manifest["table_count"] == 6, (
-        f"table_count is {manifest['table_count']}. The SDD's own example "
-        "manifest in 5.1 says 7, which predates the removal of chargebacks from "
-        "v1 (SDD 3.0). Six is correct."
+        f"table_count is {manifest['table_count']}, not 6. Chargebacks are out "
+        "of v1 scope (SDD 3.0), so there is no seventh table. SDD 5.1's example "
+        "manifest said 7 until revision 2 and now says 6."
     )
     tables = manifest["tables"]
     assert len(tables) == 6

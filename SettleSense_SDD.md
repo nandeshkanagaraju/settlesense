@@ -147,7 +147,11 @@ class CaseOutcome:
     status: ExceptionStatus
     observed_net: Money | None              # None when no bank credit was linked
     variance: Money | None                  # expected_net - observed_net
-    category: str | None                    # closed taxonomy
+    category: str | None                    # from taxonomy.VARIANCE_CATEGORIES only.
+                                            # Deduction categories (MDR_FEE,
+                                            # GST_ON_FEE, REFUND_OFFSET) are
+                                            # components of expected_net and are
+                                            # NEVER emitted here. See PDD 6.1.
     batch_id: str | None
     bank_row_id: str | None
     resolved_by: str | None                 # DETERMINISTIC | AI_VERIFIED | HUMAN
@@ -160,6 +164,8 @@ class CaseOutcome:
 |---|---|---|---|
 | **A — payment cases** | `ReconciliationCase` | count of captured payments | **All headline metrics.** case match rate, residual count, residual precision, abstention rate, false-match rate, gross-exposure value, expected-net cash value |
 | **B — batch↔bank links** | `TruthEdge(BATCH_TO_BANK)` | count of settlement batches | A separate, clearly labelled table. Its own link rate and its own false-link rate |
+
+**Population C — row-grain variances (added at M1; reported via `ReconciliationResult.row_variances`).** Some variances belong to neither population because they are not payments and not batches: a `DUPLICATE_CONFIRMED` ledger row is not a payment, and an orphan bank credit has no batch. Without a home they are dropped from truth entirely and become unscoreable. They are recorded in `truth.row_variances` keyed by source row id, reported in their own small table with a row-count denominator, and **never merged into A or B**.
 
 Rules, enforced by tests:
 
@@ -551,7 +557,7 @@ Ground truth is written to a **separate file** (`truth_<seed>.json`) that the en
 
 ```json
 {"generator_commit": "<real sha>", "seeds": {"dev": 42, "holdout": 999},
- "calendar_version": "calendar_v1", "table_count": 7}
+ "calendar_version": "calendar_v1", "table_count": 6}
 ```
 
 Truth files carry `generator_commit: null` — the hash cannot exist before the commit that freezes the generator, and truth files are never rewritten afterwards. Eval output reports the truth-file seed **and** the manifest's `generator_commit`. `test_no_literal_placeholders` fails on `GENERATOR_COMMIT`, `<hash>`, `TODO`, `XXX` or `TO BE MEASURED` anywhere outside this SDD and the build prompts (both of which use them only in prohibitions).
@@ -628,11 +634,22 @@ class ReconciliationResult:
     """The business result. Serialized, hashed, compared, goldened.
     Contains NO wall-clock data of any kind — no durations, no timestamps,
     no memory figures. Adding a timing field here is a D6 violation."""
-    cases: tuple[CaseOutcome, ...]          # Population A, sorted by case_id
+    cases: tuple[CaseOutcome, ...]             # Population A, sorted by case_id
     batch_links: tuple[BatchLinkOutcome, ...]  # Population B, sorted by batch_id
-    exceptions: tuple[Exception_, ...]      # sorted by exception_id
+    row_variances: tuple[RowVarianceOutcome, ...]  # Population C, sorted by row_id
+    exceptions: tuple[Exception_, ...]         # sorted by exception_id
     calendar_version: str
     config_hash: str
+
+@dataclass(frozen=True)
+class RowVarianceOutcome:
+    """Population C. A variance whose subject is neither a payment nor a batch:
+    a duplicate ledger row, an orphan bank credit. Row-count denominator."""
+    row_id: str
+    source_table: str                  # ledger_rows | bank_rows
+    status: ExceptionStatus
+    category: str | None
+    amount: Money | None
 
 # settlesense/core/telemetry.py  — a SEPARATE module, never imported by types.py
 @dataclass(frozen=True)
