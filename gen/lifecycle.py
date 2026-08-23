@@ -55,6 +55,7 @@ __all__ = [
     "SettlementLineType",
     "WorkingCalendar",
     "assemble_batches",
+    "bank_txn_id_for",
     "generate_clean_chain",
     "load_working_calendar",
     "money",
@@ -109,6 +110,19 @@ def _stable_utr(*parts: object) -> str:
     """A 16-character alphanumeric UTR, deterministic in its inputs (D10)."""
     canonical = "|".join(str(part) for part in parts)
     return hashlib.sha256(f"utr|{canonical}".encode()).hexdigest()[:16].upper()
+
+
+def bank_txn_id_for(batch_id: str) -> str:
+    """The bank credit a batch produces, derived from the batch id alone (D10).
+
+    TRUTH-SIDE LINKAGE. The generator knows which credit belongs to which batch
+    because it built both; it must never recover that link by parsing the
+    narration, because narration is exactly what the noise layer damages.
+    Reading truth out of the narration would make ground truth degrade in step
+    with the difficulty - the link would vanish precisely when the engine is
+    being tested on finding it.
+    """
+    return _stable_id("BNK", batch_id)
 
 
 def _check_year(value: date, what: str) -> date:
@@ -343,6 +357,14 @@ class Chain:
     refund: RefundRow | None
     payment_line: PendingSettlementLine
     refund_line: PendingSettlementLine | None
+    # A split settlement gives ONE case several PAYMENT lines (SDD 3.1). They
+    # live here rather than as extra Chains: two chains would be two cases, and
+    # the denominator would then depend on how the gateway batched the payout.
+    extra_payment_lines: tuple[PendingSettlementLine, ...] = ()
+
+    @property
+    def payment_lines(self) -> tuple[PendingSettlementLine, ...]:
+        return (self.payment_line, *self.extra_payment_lines)
 
     @property
     def expected_gross(self) -> Decimal:
@@ -351,18 +373,18 @@ class Chain:
     @property
     def expected_net(self) -> Decimal:
         """gross - fee - tax - refunds, at case grain (SDD 3.1b)."""
-        total = self.payment_line.net
+        total = sum((line.net for line in self.payment_lines), start=ZERO)
         if self.refund_line is not None:
             total += self.refund_line.net  # already negative
         return money(total)
 
     @property
     def fee(self) -> Decimal:
-        return self.payment_line.fee
+        return money(sum((line.fee for line in self.payment_lines), start=ZERO))
 
     @property
     def tax(self) -> Decimal:
-        return self.payment_line.tax
+        return money(sum((line.tax for line in self.payment_lines), start=ZERO))
 
     @property
     def refund_amount(self) -> Decimal:

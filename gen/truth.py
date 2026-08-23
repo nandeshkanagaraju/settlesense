@@ -27,16 +27,20 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from gen.lifecycle import (
     REQUIRED_YEAR,
     CleanDataset,
     SettlementLineType,
     WorkingCalendar,
+    bank_txn_id_for,
     money,
 )
 from gen.profiles import MerchantProfile
+
+if TYPE_CHECKING:  # noise.py imports VarianceCategory from here; keep it one-way
+    from gen.noise import NoiseAnnotation, NoiseLedger
 
 __all__ = [
     "EdgeType",
@@ -107,6 +111,44 @@ class Violation:
         return f"[{self.edge_type.value}] {self.detail}"
 
 
+# When several noise types land on one target, the reported category is the most
+# consequential, chosen by this fixed precedence so the choice is never
+# iteration-order dependent (D4). Terminal states outrank recoverable ones.
+CATEGORY_PRECEDENCE: Final[tuple[VarianceCategory, ...]] = (
+    VarianceCategory.UNEXPLAINED,
+    VarianceCategory.MISSING_VS_LATE_CREDIT,
+    VarianceCategory.SPLIT_SETTLEMENT,
+    VarianceCategory.UTR_MISSING_MAPPING,
+    VarianceCategory.UTR_TRUNCATED_MAPPING,
+    VarianceCategory.DUPLICATE_CANDIDATE,
+    VarianceCategory.DUPLICATE_CONFIRMED,
+    VarianceCategory.PARTIAL_CAPTURE,
+    VarianceCategory.T_PLUS_N_TIMING,
+    VarianceCategory.REFUND_OFFSET,
+    VarianceCategory.ROUNDING_DIFFERENCE,
+    VarianceCategory.GST_ON_FEE,
+    VarianceCategory.MDR_FEE,
+)
+
+
+@dataclass(frozen=True)
+class TruthBatchLink:
+    """POPULATION B truth: one settlement batch and its bank credit.
+
+    Kept in its own table with its own denominator. A batch-link failure reaches
+    Population A only through the cases inside that batch, which the eval finds
+    by joining case.batch_ids - never by merging these rows into case metrics
+    (D11).
+    """
+
+    batch_id: str
+    bank_txn_id: str | None  # None means the credit never arrived
+    net_total: Decimal
+    true_category: VarianceCategory | None
+    resolvable_in_principle: bool
+    noise_types: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class TruthCase:
     """Ground truth for one ReconciliationCase - one per captured payment.
@@ -142,14 +184,16 @@ class TruthCase:
     true_category: VarianceCategory | None
     true_variance_amount: Decimal
     resolvable_in_principle: bool
-    noise_type: str | None
+    noise_type: str | None  # the dominant one; see noise_types for all
+    noise_types: tuple[str, ...]
     deduction_categories: tuple[VarianceCategory, ...]
 
 
 @dataclass(frozen=True)
 class Truth:
     edges: tuple[TruthEdge, ...]
-    cases: tuple[TruthCase, ...]
+    cases: tuple[TruthCase, ...]  # Population A
+    batch_links: tuple[TruthBatchLink, ...]  # Population B - separate table
     calendar_version: str
     seed: int
     generator_commit: None  # literally null; see write_truth
@@ -169,25 +213,46 @@ def case_id_for(payment_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def dominant_category(
+    annotations: Sequence[NoiseAnnotation],
+) -> VarianceCategory | None:
+    """The most consequential category among several, by fixed precedence (D4)."""
+    present = {a.category for a in annotations if a.category is not None}
+    for candidate in CATEGORY_PRECEDENCE:
+        if candidate in present:
+            return candidate
+    return None
+
+
 def build_truth(
     dataset: CleanDataset,
     calendar: WorkingCalendar,
     profiles: Mapping[str, MerchantProfile],
     seed: int,
+    noise: NoiseLedger | None = None,
 ) -> Truth:
-    """Derive the typed edge set and the per-case truth from a built dataset."""
+    """Derive the typed edge set and the per-case truth from a built dataset.
+
+    With `noise`, each case and each batch link is annotated from what the
+    injectors recorded doing - truth is derived from the ledger of actions, not
+    reverse-engineered from the result.
+    """
+    by_case: Mapping[str, tuple[NoiseAnnotation, ...]] = noise.by_target("case") if noise else {}
+    by_link: Mapping[str, tuple[NoiseAnnotation, ...]] = (
+        noise.by_target("batch_link") if noise else {}
+    )
     edges: list[TruthEdge] = []
 
     lines_by_payment: dict[str, list[Any]] = {}
     for line in dataset.settlement_lines:
         lines_by_payment.setdefault(line.payment_id, []).append(line)
 
-    batch_by_id = {batch.batch_id: batch for batch in dataset.batches}
-    bank_by_utr = {
-        batch.utr: row
+    # Linked by construction (see bank_txn_id_for), never by reading narration.
+    bank_by_txn = {row.bank_txn_id: row for row in dataset.bank_rows}
+    bank_for_batch = {
+        batch.batch_id: bank_by_txn[bank_txn_id_for(batch.batch_id)]
         for batch in dataset.batches
-        for row in dataset.bank_rows
-        if batch.utr in row.narration
+        if bank_txn_id_for(batch.batch_id) in bank_by_txn
     }
 
     # ORDER_TO_PAYMENT (1:1)
@@ -208,7 +273,7 @@ def build_truth(
 
     # BATCH_TO_BANK (1:1)
     for batch in dataset.batches:
-        row = bank_by_utr.get(batch.utr)
+        row = bank_for_batch.get(batch.batch_id)
         if row is not None:
             edges.append(TruthEdge(EdgeType.BATCH_TO_BANK, batch.batch_id, row.bank_txn_id))
 
@@ -240,12 +305,13 @@ def build_truth(
         if refunds:
             deductions.append(VarianceCategory.REFUND_OFFSET)
 
+        case_noise = by_case.get(payment_id, ())
         batch_ids = sorted({line.batch_id for line in touching})
         bank_ids = sorted(
             {
-                bank_by_utr[batch_by_id[batch_id].utr].bank_txn_id
+                bank_for_batch[batch_id].bank_txn_id
                 for batch_id in batch_ids
-                if batch_id in batch_by_id and batch_by_id[batch_id].utr in bank_by_utr
+                if batch_id in bank_for_batch
             }
         )
 
@@ -263,26 +329,51 @@ def build_truth(
                 refund_ids=tuple(sorted(refund.refund_id for refund in refunds)),
                 batch_ids=tuple(batch_ids),
                 bank_txn_ids=tuple(bank_ids),
-                # Clean chains land exactly what they expect, so there is no
-                # variance to explain and no category to assign. Noise (part B)
-                # is what populates these.
-                true_category=None,
+                # A clean chain lands exactly what it expects, so there is no
+                # variance and no category. Noise is what populates these.
+                true_category=dominant_category(case_noise),
                 true_variance_amount=ZERO,
-                resolvable_in_principle=True,
-                noise_type=None,
+                resolvable_in_principle=all(a.resolvable for a in case_noise),
+                noise_type=(
+                    sorted(case_noise, key=_noise_rank)[0].noise_type if case_noise else None
+                ),
+                noise_types=tuple(sorted({a.noise_type for a in case_noise})),
                 deduction_categories=tuple(deductions),
+            )
+        )
+
+    # Population B, its own table with its own denominator (D11).
+    batch_links: list[TruthBatchLink] = []
+    for batch in dataset.batches:
+        link_noise = by_link.get(batch.batch_id, ())
+        row = bank_for_batch.get(batch.batch_id)
+        batch_links.append(
+            TruthBatchLink(
+                batch_id=batch.batch_id,
+                bank_txn_id=row.bank_txn_id if row is not None else None,
+                net_total=batch.net_total,
+                true_category=dominant_category(link_noise),
+                resolvable_in_principle=all(a.resolvable for a in link_noise),
+                noise_types=tuple(sorted({a.noise_type for a in link_noise})),
             )
         )
 
     edges.sort(key=lambda edge: (edge.edge_type.value, edge.src_id, edge.dst_id))
     cases.sort(key=lambda case: case.case_id)
+    batch_links.sort(key=lambda link: link.batch_id)
     return Truth(
         edges=tuple(edges),
         cases=tuple(cases),
+        batch_links=tuple(batch_links),
         calendar_version=calendar.version,
         seed=seed,
         generator_commit=None,
     )
+
+
+def _noise_rank(annotation: NoiseAnnotation) -> tuple[int, str]:
+    order = CATEGORY_PRECEDENCE.index(annotation.category) if annotation.category else 99
+    return (order, annotation.noise_type)
 
 
 # ---------------------------------------------------------------------------
@@ -388,13 +479,24 @@ def run_self_check(
     *,
     calendar: WorkingCalendar,
     profiles: Mapping[str, MerchantProfile],
+    noise: NoiseLedger | None = None,
 ) -> None:
     """Raise TruthSelfCheckError unless every assertion holds.
 
     Collects ALL failures rather than stopping at the first, so one run tells
     you everything that is wrong.
+
+    With `noise`, the check is not RELAXED - it is EXTENDED. Every assertion
+    still holds for every un-noised chain; the injected deviations must each be
+    claimed by an annotation, and every annotation must correspond to a
+    deviation that is actually present. Accounting runs both ways, so noise can
+    neither hide a generator bug nor be claimed without having happened.
     """
     problems: list[str] = []
+    orphan_credits = noise.orphan_bank_txn_ids() if noise else frozenset()
+    unbanked = noise.unbanked_batch_ids() if noise else frozenset()
+    dup_confirmed = noise.duplicate_confirmed_order_ids() if noise else frozenset()
+    split_payments = noise.split_payment_ids() if noise else frozenset()
 
     lines_by_batch: dict[str, list[Any]] = {}
     for line in dataset.settlement_lines:
@@ -416,6 +518,11 @@ def run_self_check(
                 f"case {case.case_id}: {len(case.payment_line_ids)} PAYMENT lines but "
                 f"category is {case.true_category}; N>=2 marks SPLIT_SETTLEMENT"
             )
+    if noise is None and split_cases:
+        problems.append(
+            f"{len(split_cases)} case(s) have N>=2 PAYMENT lines with no noise applied; "
+            f"split settlement is a WITHHELD noise type and cannot occur in clean chains"
+        )
 
     # ---- 6. every clean chain balances to the cent ------------------------
     for chain in dataset.chains:
@@ -456,9 +563,11 @@ def run_self_check(
     # ---- 7a. bank credit == batch net_total, refund batches included ------
     bank_by_txn = {row.bank_txn_id: row for row in dataset.bank_rows}
     linked = [edge for edge in truth.edges if edge.edge_type is EdgeType.BATCH_TO_BANK]
-    if len(linked) != len(dataset.batches):
+    expected_links = len(dataset.batches) - len(unbanked)
+    if len(linked) != expected_links:
         problems.append(
-            f"{len(linked)} BATCH_TO_BANK edges for {len(dataset.batches)} batches; 1:1"
+            f"{len(linked)} BATCH_TO_BANK edges for {len(dataset.batches)} batches minus "
+            f"{len(unbanked)} withheld credit(s) = {expected_links} expected; 1:1"
         )
     mixed_checked = 0
     for edge in linked:
@@ -606,13 +715,31 @@ def run_self_check(
     sum_bank = money(sum((row.amount for row in dataset.bank_rows), start=ZERO))
     sum_batch = money(sum((batch.net_total for batch in dataset.batches), start=ZERO))
     sum_lines = money(sum((line.net for line in dataset.settlement_lines), start=ZERO))
-    if not (sum_bank == sum_batch == sum_lines):
+    if sum_batch != sum_lines:
+        problems.append(f"batch-side conservation: batches {sum_batch} != signed lines {sum_lines}")
+    # Only `unexplainable` may move this identity, and only by an amount the
+    # ledger states in advance. Anything else is a generator bug wearing noise
+    # as a disguise.
+    orphan_total = money(
+        sum((r.amount for r in dataset.bank_rows if r.bank_txn_id in orphan_credits), start=ZERO)
+    )
+    missing_total = money(
+        sum((b.net_total for b in dataset.batches if b.batch_id in unbanked), start=ZERO)
+    )
+    predicted_bank = money(sum_batch + orphan_total - missing_total)
+    if sum_bank != predicted_bank:
         problems.append(
             f"batch-side conservation: bank {sum_bank} != batches {sum_batch} "
-            f"!= signed lines {sum_lines}"
+            f"+ orphan credits {orphan_total} - withheld credits {missing_total} "
+            f"= {predicted_bank}"
         )
     if sum_net != sum_lines:
         problems.append(f"the two sides disagree: case net {sum_net} != line total {sum_lines}")
+
+    # ---- noise accounting, BOTH directions --------------------------------
+    problems += _account_for_noise(
+        dataset, truth, orphan_credits, unbanked, dup_confirmed, split_payments, noise
+    )
 
     # ---- 11. every date value is in 2026 ----------------------------------
     for label, value in _every_date(dataset):
@@ -712,6 +839,7 @@ def truth_to_dict(truth: Truth) -> dict[str, Any]:
         "counts": {
             "edges": len(truth.edges),
             "cases": len(truth.cases),
+            "batch_links": len(truth.batch_links),
             **{
                 edge_type.value: sum(1 for e in truth.edges if e.edge_type is edge_type)
                 for edge_type in EdgeType
@@ -720,6 +848,19 @@ def truth_to_dict(truth: Truth) -> dict[str, Any]:
         "edges": [
             {"edge_type": edge.edge_type.value, "src_id": edge.src_id, "dst_id": edge.dst_id}
             for edge in truth.edges
+        ],
+        # POPULATION B. Its own table, its own denominator. Never merged into
+        # the case metrics above (D11).
+        "batch_links": [
+            {
+                "batch_id": link.batch_id,
+                "bank_txn_id": link.bank_txn_id,
+                "net_total": _money_str(link.net_total),
+                "true_category": link.true_category.value if link.true_category else None,
+                "resolvable_in_principle": link.resolvable_in_principle,
+                "noise_types": list(link.noise_types),
+            }
+            for link in truth.batch_links
         ],
         "cases": [
             {
@@ -739,6 +880,7 @@ def truth_to_dict(truth: Truth) -> dict[str, Any]:
                 "true_variance_amount": _money_str(case.true_variance_amount),
                 "resolvable_in_principle": case.resolvable_in_principle,
                 "noise_type": case.noise_type,
+                "noise_types": list(case.noise_types),
                 "deduction_categories": [c.value for c in case.deduction_categories],
             }
             for case in truth.cases
@@ -770,3 +912,115 @@ def _reject_wall_clock(node: Any, path: str) -> None:
     elif isinstance(node, (list, tuple)):
         for index, value in enumerate(node):
             _reject_wall_clock(value, f"{path}[{index}]")
+
+
+def _account_for_noise(
+    dataset: CleanDataset,
+    truth: Truth,
+    orphan_credits: frozenset[str],
+    unbanked: frozenset[str],
+    dup_confirmed: frozenset[str],
+    split_payments: frozenset[str],
+    noise: NoiseLedger | None,
+) -> list[str]:
+    """Every injected error is claimed, and every claim actually happened.
+
+    One direction alone is not enough. Checking only that annotations are real
+    would let an unannotated generator bug pass as noise; checking only that
+    deviations are annotated would let the ledger claim errors it never made.
+    """
+    problems: list[str] = []
+    expected_txn = {bank_txn_id_for(b.batch_id): b.batch_id for b in dataset.batches}
+
+    # --- orphan bank credits ------------------------------------------------
+    observed_orphans = {
+        row.bank_txn_id for row in dataset.bank_rows if row.bank_txn_id not in expected_txn
+    }
+    for txn_id in sorted(observed_orphans - orphan_credits):
+        problems.append(
+            f"bank {txn_id}: credit matches no batch and no annotation claims it. "
+            f"An unclaimed orphan credit is a generator bug, not noise."
+        )
+    for txn_id in sorted(orphan_credits - observed_orphans):
+        problems.append(f"noise claims orphan credit {txn_id}, but it is not in the dataset")
+
+    # --- batches whose credit never arrived ----------------------------------
+    credited = {
+        expected_txn[row.bank_txn_id]
+        for row in dataset.bank_rows
+        if row.bank_txn_id in expected_txn
+    }
+    observed_unbanked = {b.batch_id for b in dataset.batches} - credited
+    for batch_id in sorted(observed_unbanked - unbanked):
+        problems.append(
+            f"batch {batch_id}: no bank credit and no annotation claims it. Every batch "
+            f"is credited unless `unexplainable` withheld it."
+        )
+    for batch_id in sorted(unbanked - observed_unbanked):
+        problems.append(f"noise claims batch {batch_id} was never credited, but a credit exists")
+
+    # --- duplicate ledger rows ------------------------------------------------
+    seen: dict[str, int] = {}
+    for row in dataset.ledger_rows:
+        seen[row.order_id] = seen.get(row.order_id, 0) + 1
+    observed_dupes = {order_id for order_id, n in seen.items() if n > 1}
+    for order_id in sorted(observed_dupes - dup_confirmed):
+        problems.append(
+            f"order {order_id} appears {seen[order_id]}x in the ledger with no "
+            f"DUPLICATE_CONFIRMED annotation"
+        )
+    for order_id in sorted(dup_confirmed - observed_dupes):
+        problems.append(f"noise claims order {order_id} is duplicated, but it appears once")
+
+    # --- split settlements ----------------------------------------------------
+    observed_splits = {case.payment_id for case in truth.cases if len(case.payment_line_ids) >= 2}
+    for payment_id in sorted(observed_splits - split_payments):
+        problems.append(f"payment {payment_id}: N>=2 PAYMENT lines with no split annotation")
+    for payment_id in sorted(split_payments - observed_splits):
+        problems.append(f"noise claims payment {payment_id} was split, but it has one PAYMENT line")
+
+    # --- partial captures ------------------------------------------------------
+    partial_claimed = (
+        {a.target_id for a in noise.of_type("partial_captures")} if noise else frozenset()
+    )
+    observed_partial = {
+        row.payment_id for row in dataset.payment_rows if row.captured < row.authorized
+    }
+    for payment_id in sorted(observed_partial - partial_claimed):
+        problems.append(
+            f"payment {payment_id}: captured < authorised with no PARTIAL_CAPTURE annotation"
+        )
+    for payment_id in sorted(partial_claimed - observed_partial):
+        problems.append(
+            f"noise claims payment {payment_id} was partially captured, but captured == authorised"
+        )
+
+    # --- every annotation points at something that exists ----------------------
+    if noise is not None:
+        known_cases = {case.payment_id for case in truth.cases}
+        known_links = {link.batch_id for link in truth.batch_links}
+        known_rows = (
+            {r.order_id for r in dataset.ledger_rows}
+            | {r.bank_txn_id for r in dataset.bank_rows}
+            | {r.refund_id for r in dataset.refund_rows}
+            | {line.settlement_id for line in dataset.settlement_lines}
+            | {r.payment_id for r in dataset.payment_rows}
+        )
+        for annotation in noise.annotations:
+            pool = {
+                "case": known_cases,
+                "batch_link": known_links,
+                "bank_row": {r.bank_txn_id for r in dataset.bank_rows},
+                "ledger_row": known_rows,
+            }.get(annotation.target_kind)
+            if pool is None:
+                problems.append(
+                    f"annotation {annotation.noise_type}: unknown target_kind "
+                    f"{annotation.target_kind!r}"
+                )
+            elif annotation.target_id not in pool:
+                problems.append(
+                    f"annotation {annotation.noise_type} targets {annotation.target_id}, "
+                    f"which is not a known {annotation.target_kind}"
+                )
+    return problems

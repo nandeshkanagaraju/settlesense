@@ -27,7 +27,7 @@ import csv
 import json
 import random
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -47,6 +47,7 @@ from gen.lifecycle import (
     load_working_calendar,
     verify_clean_dataset,
 )
+from gen.noise import NoiseLedger, NoiseRates, apply_noise
 from gen.profiles import PROFILES, MerchantProfile
 from gen.truth import (
     EdgeType,
@@ -148,35 +149,110 @@ def _fmt(value: object) -> str:
     return str(value)
 
 
-def _write_csv(path: Path, columns: Sequence[str], rows: Iterable[Sequence[object]]) -> int:
-    """Write one CSV with a fixed column order and LF line endings."""
+def _write_csv(
+    path: Path,
+    columns: Sequence[str],
+    rows: Iterable[Sequence[object]],
+    table: str = "",
+    formats: Mapping[tuple[str, str, str], str] | None = None,
+) -> int:
+    """Write one CSV with a fixed column order and LF line endings.
+
+    A format override replaces the TEXT of one cell. The row's Decimal is
+    unchanged - this is a rendering variation the normalizer must survive, not
+    a different number.
+    """
     count = 0
+    overrides = formats or {}
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(columns)
         for row in rows:
-            writer.writerow([_fmt(value) for value in row])
+            row_id = str(row[0])
+            cells = [
+                overrides.get((table, row_id, column), _fmt(value))
+                for column, value in zip(columns, row, strict=True)
+            ]
+            writer.writerow(cells)
             count += 1
     return count
 
 
-def _bucket(rows: Iterable[Any], key: Any, base_date: date) -> dict[int, list[Any]]:
+def _bucket(
+    rows: Iterable[Any],
+    key: Any,
+    base_date: date,
+    table: str,
+    row_id: Any,
+    lag: Any,
+) -> dict[int, list[Any]]:
+    """Bucket rows by the day they are DELIVERED, which is their event day plus
+    any out-of-order-arrival lag. event_date on the row itself never moves."""
     buckets: dict[int, list[Any]] = {}
     for row in rows:
-        buckets.setdefault(_day_index(key(row), base_date), []).append(row)
+        day = _day_index(key(row), base_date) + lag(table, row_id(row))
+        buckets.setdefault(day, []).append(row)
     return buckets
 
 
-def write_dataset(dataset: CleanDataset, out_dir: Path, base_date: date) -> dict[str, Any]:
-    """Write six CSVs per day bundle. Returns a manifest describing the run."""
-    out_dir.mkdir(parents=True, exist_ok=True)
+def write_dataset(
+    dataset: CleanDataset,
+    out_dir: Path,
+    base_date: date,
+    noise: NoiseLedger | None = None,
+) -> dict[str, Any]:
+    """Write six CSVs per day bundle. Returns a manifest describing the run.
 
-    ledger = _bucket(dataset.ledger_rows, lambda r: r.order_date, base_date)
-    payments = _bucket(dataset.payment_rows, lambda r: r.captured_at, base_date)
-    refunds = _bucket(dataset.refund_rows, lambda r: r.created_at, base_date)
-    settlements = _bucket(dataset.settlement_lines, lambda r: r.settled_event_date, base_date)
-    batches = _bucket(dataset.batches, lambda r: r.settled_event_date, base_date)
-    bank = _bucket(dataset.bank_rows, lambda r: r.value_date, base_date)
+    Two noise kinds land here rather than in the row model, because neither is a
+    change to the data: `mixed_amount_formats` overrides the TEXT of a cell
+    while the Decimal behind it is untouched, and `out_of_order_arrival`
+    overrides which day bundle DELIVERS a row while its event_date stands.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    formats = dict(noise.format_overrides) if noise else {}
+    delays = dict(noise.day_overrides) if noise else {}
+
+    def lag(table: str, row_id: str) -> int:
+        return delays.get((table, row_id), 0)
+
+    ledger = _bucket(
+        dataset.ledger_rows, lambda r: r.order_date, base_date, "ledger", lambda r: r.order_id, lag
+    )
+    payments = _bucket(
+        dataset.payment_rows,
+        lambda r: r.captured_at,
+        base_date,
+        "payments",
+        lambda r: r.payment_id,
+        lag,
+    )
+    refunds = _bucket(
+        dataset.refund_rows,
+        lambda r: r.created_at,
+        base_date,
+        "refunds",
+        lambda r: r.refund_id,
+        lag,
+    )
+    settlements = _bucket(
+        dataset.settlement_lines,
+        lambda r: r.settled_event_date,
+        base_date,
+        "settlements",
+        lambda r: r.settlement_id,
+        lag,
+    )
+    batches = _bucket(
+        dataset.batches,
+        lambda r: r.settled_event_date,
+        base_date,
+        "batches",
+        lambda r: r.batch_id,
+        lag,
+    )
+    bank = _bucket(
+        dataset.bank_rows, lambda r: r.value_date, base_date, "bank", lambda r: r.bank_txn_id, lag
+    )
 
     last_day = max(
         [1]
@@ -232,16 +308,22 @@ def write_dataset(dataset: CleanDataset, out_dir: Path, base_date: date) -> dict
                 out_dir / f"day{day}_ledger.csv",
                 LEDGER_COLUMNS,
                 (ledger_row(r) for r in sorted(ledger.get(day, []), key=lambda r: r.order_id)),
+                "ledger",
+                formats,
             ),
             "payments": _write_csv(
                 out_dir / f"day{day}_payments.csv",
                 PAYMENT_COLUMNS,
                 (payment_row(r) for r in sorted(payments.get(day, []), key=lambda r: r.payment_id)),
+                "payments",
+                formats,
             ),
             "refunds": _write_csv(
                 out_dir / f"day{day}_refunds.csv",
                 REFUND_COLUMNS,
                 (refund_row(r) for r in sorted(refunds.get(day, []), key=lambda r: r.refund_id)),
+                "refunds",
+                formats,
             ),
             "settlements": _write_csv(
                 out_dir / f"day{day}_settlements.csv",
@@ -250,16 +332,22 @@ def write_dataset(dataset: CleanDataset, out_dir: Path, base_date: date) -> dict
                     settlement_row(r)
                     for r in sorted(settlements.get(day, []), key=lambda r: r.settlement_id)
                 ),
+                "settlements",
+                formats,
             ),
             "batches": _write_csv(
                 out_dir / f"day{day}_batches.csv",
                 BATCH_COLUMNS,
                 (batch_row(r) for r in sorted(batches.get(day, []), key=lambda r: r.batch_id)),
+                "batches",
+                formats,
             ),
             "bank": _write_csv(
                 out_dir / f"day{day}_bank.csv",
                 BANK_COLUMNS,
                 (bank_row(r) for r in sorted(bank.get(day, []), key=lambda r: r.bank_txn_id)),
+                "bank",
+                formats,
             ),
         }
         days.append(
@@ -321,13 +409,6 @@ def _check_profiles_against_calendar(calendar: WorkingCalendar) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
 
-    if args.include_withheld:
-        raise SystemExit(
-            "--include-withheld is not implemented: noise injection is M1 part B "
-            "(gen/noise.py). Refusing rather than silently writing clean data and "
-            "labelling it a held-out set."
-        )
-
     calendar = load_working_calendar(args.calendar)
     _check_profiles_against_calendar(calendar)
 
@@ -353,21 +434,44 @@ def main(argv: Sequence[str] | None = None) -> int:
     # file written from a dataset that does not balance makes every downstream
     # metric confidently wrong, which is worse than having no truth file.
     profiles_by_name = {profile.name: profile for profile in PROFILES}
-    truth = build_truth(dataset, calendar, profiles_by_name, args.seed)
+
+    # PASS 1 - the clean dataset, with no allowance for noise whatsoever.
+    clean_truth = build_truth(dataset, calendar, profiles_by_name, args.seed)
     try:
-        run_self_check(dataset, truth, calendar=calendar, profiles=profiles_by_name)
+        run_self_check(dataset, clean_truth, calendar=calendar, profiles=profiles_by_name)
     except TruthSelfCheckError as error:
+        print("CLEAN self-check failed:", file=sys.stderr)
         print(str(error), file=sys.stderr)
         return 1
 
-    manifest = write_dataset(dataset, args.out, base_date)
+    # PASS 2 - inject noise, then run the SAME check again. It is extended with
+    # the noise ledger, not relaxed: every clean chain must still balance, and
+    # every injected error must be claimed by an annotation AND observable.
+    noisy, ledger = apply_noise(
+        dataset,
+        rng,
+        profiles_by_name,
+        NoiseRates(),
+        include_withheld=args.include_withheld,
+    )
+    truth = build_truth(noisy, calendar, profiles_by_name, args.seed, noise=ledger)
+    try:
+        run_self_check(noisy, truth, calendar=calendar, profiles=profiles_by_name, noise=ledger)
+    except TruthSelfCheckError as error:
+        print("POST-NOISE self-check failed:", file=sys.stderr)
+        print(str(error), file=sys.stderr)
+        return 1
+    dataset = noisy
+
+    manifest = write_dataset(dataset, args.out, base_date, ledger)
     manifest.update(
         {
             "seed": args.seed,
             "capture_days": args.days,
             "records": args.records,
             "calendar_version": calendar.version,
-            "include_withheld": False,
+            "include_withheld": args.include_withheld,
+            "noise_counts": dict(ledger.counts),
             "generator_commit": None,  # written only in GENERATOR_MANIFEST.json, after the freeze
             "counts": {
                 "chains": len(dataset.chains),
@@ -387,7 +491,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
-    _report(args, calendar, base_date, dataset, truth, manifest, truth_path)
+    _report(args, calendar, base_date, dataset, truth, manifest, truth_path, ledger)
     return 0
 
 
@@ -399,6 +503,7 @@ def _report(
     truth: Truth,
     manifest: dict[str, Any],
     truth_path: Path,
+    ledger: NoiseLedger,
 ) -> None:
     """Print the self-check result and a summary of what was generated."""
     counts = manifest["counts"]
