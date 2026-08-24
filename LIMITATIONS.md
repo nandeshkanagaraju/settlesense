@@ -65,8 +65,11 @@ Note what that sentence admits. The collision case had to be **constructed**,
 because no two batches in the seed-42 dataset share an amount at all — the
 safeguard is tested, but it has never fired on real generated data. Whether it
 fires at the right rate under realistic density is not established here.
-Seeds 1000–1019 are checked for naturally occurring collisions; whatever they
-show is recorded rather than assumed.
+Seeds 1000–1019 were checked for naturally occurring collisions. **Zero, across
+all twenty seeds and 780 batches.** So the safeguard still has never fired on
+generated data, and this limitation is confirmed rather than resolved: twenty
+seeds agreeing that collisions do not occur is not evidence that Path B handles
+them, only that this generator cannot produce the case that would test it.
 
 ## Baselines
 

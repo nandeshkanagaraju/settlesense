@@ -80,7 +80,38 @@ finding to investigate — **not** grounds to drop the seed. If any seed is ever
 excluded, the exclusion and its reason are recorded here in the same commit
 that excludes it.
 
-**Storage.** The twenty datasets are ~300MB and are NOT committed. They are
+### What it turned out to be — measured after the declaration above
+
+Recorded in a later commit than the declaration, deliberately, so the order is
+visible in `git log`. Nothing here was used to revise anything above.
+
+| | |
+|---|---|
+| Decisions (one per ambiguous pair) | **507** against a pre-declared ~520 |
+| Cases flagged (both halves of each pair) | 1,014 |
+| Pairs per seed | mean 25.35, range 18–34 |
+| Seeds excluded | **0** |
+
+**On stability.** "~26 ± a few" is not testable, because *a few* is not a
+number. Duplicate pairs are rare independent events over ~5,000 chains, so the
+count is Poisson-ish and its expected spread is √mean = 5.03. Observed spread
+is 4.25 — a dispersion of **0.84×**, slightly *narrower* than chance alone
+produces. The extremes sit at −1.46σ (seed 1005, 18 pairs) and +1.72σ (seed
+1009, 34 pairs). No outlier, nothing to investigate.
+
+**Two exact invariants hold on all twenty seeds**, and they are asserted:
+`cases == 5000 + pairs` (each pair adds exactly one repeat purchase, hence one
+new case) and `residual == 2 × pairs` (the engine flags both halves, because it
+cannot know which was injected).
+
+**A negative result worth stating.** Zero natural batch-amount collisions
+across all twenty seeds — 780 batches. Path B's abstention rule therefore still
+has never fired on generated data, and its 6-of-8 precision remains conditioned
+on low batch density exactly as `LIMITATIONS.md` says. Twenty seeds agreeing
+that collisions do not occur is *not* evidence that Path B handles them; it is
+evidence that this generator cannot produce the case that would test it.
+
+**Storage.** The twenty datasets are ~146MB and are NOT committed. They are
 defined by (frozen generator commit, seed) and regenerate byte-identically;
 `EVAL_SET_MANIFEST.json` records a content hash per seed, which is a
 checkable claim rather than 2,880 files nobody will read. Regenerate with

@@ -4,7 +4,8 @@
     "tests/test_annotation_integrity.py": 12,
     "tests/test_config_completeness.py": 24,
     "tests/test_determinism_guard.py": 14,
-    "tests/test_env_integrity.py": 59,
+    "tests/test_env_integrity.py": 60,
+    "tests/test_eval_set.py": 49,
     "tests/test_file_reading_contract.py": 9,
     "tests/test_gen_ids.py": 9,
     "tests/test_generator_freeze.py": 9,
@@ -30,5 +31,5 @@
     "tests/test_types_money.py": 33,
     "tests/test_verbosity_honoured.py": 8
   },
-  "total": 734
+  "total": 784
 }

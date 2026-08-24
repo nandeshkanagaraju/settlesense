@@ -26,12 +26,13 @@ define notimpl
 	@exit 1
 endef
 
-.PHONY: help gen gen-holdout test eval eval-ai ui check golden-accept bench config-check fault-report collection-baseline
+.PHONY: help gen gen-holdout eval-set test eval eval-ai ui check golden-accept bench config-check fault-report collection-baseline
 
 help:
 	@echo "SettleSense targets:"
 	@echo "  gen           generate the dev dataset       (seed 42)"
 	@echo "  gen-holdout   generate the held-out dataset  (seed 999, +withheld noise)"
+	@echo "  eval-set      regenerate the AI evaluation set (seeds 1000-1019)"
 	@echo "  test          pytest: no network, deterministic, under 60s"
 	@echo "  check         ruff + mypy + determinism guard tests"
 	@echo "  fault-report  guards proven able to fail, by category"
@@ -50,6 +51,21 @@ gen:
 
 gen-holdout:
 	$(PYTHON) -m gen.generate --seed 999 --out data/holdout/ --days 20 --include-withheld
+
+# The AI evaluation set: seeds 1000-1019, ALL TWENTY, declared in README before
+# generation. ~146MB and gitignored - the datasets are defined by (frozen
+# generator commit, seed) and regenerate byte-identically, so committing 2,880
+# files would add size and no information. EVAL_SET_MANIFEST.json holds a
+# content hash per seed; tests/test_eval_set.py verifies them when the data is
+# present and checks the recorded invariants when it is not.
+EVAL_SEEDS ?= $(shell seq 1000 1019)
+
+eval-set:
+	@for seed in $(EVAL_SEEDS); do \
+	  echo "  seed $$seed"; \
+	  $(PYTHON) -m gen.generate --seed $$seed --out data/eval/seed_$$seed/ --days 20 >/dev/null; \
+	done
+	@echo "generated $(words $(EVAL_SEEDS)) datasets into data/eval/"
 
 # --- tests and static checks ------------------------------------------------
 
