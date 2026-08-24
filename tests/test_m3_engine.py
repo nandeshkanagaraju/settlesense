@@ -39,7 +39,7 @@ from settlesense.types import (
 )
 
 REPO = Path(__file__).resolve().parent.parent
-DATA = REPO / "data"
+DATA = REPO / "data" / "dev"
 DAYS = 24
 AS_OF = date(2026, 9, 30)
 ZERO = money(0)

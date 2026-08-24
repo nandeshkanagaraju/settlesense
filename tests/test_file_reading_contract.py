@@ -30,7 +30,7 @@ from settlesense.config import ConfigError, load_config
 from settlesense.ingest import IngestError, load_dataset
 
 REPO = Path(__file__).resolve().parent.parent
-DATA = REPO / "data"
+DATA = REPO / "data" / "dev"
 CONFIG = REPO / "config"
 
 SCANNED_TREES = ("settlesense", "eval")

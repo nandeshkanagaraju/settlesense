@@ -21,7 +21,7 @@ from settlesense.ingest import TABLE_FILES, DayDataset, IngestError, load_datase
 from settlesense.types import Money, SettlementLineType
 
 REPO = Path(__file__).resolve().parent.parent
-DATA = REPO / "data"
+DATA = REPO / "data" / "dev"
 CONFIG = REPO / "config"
 
 # The frozen dataset, from GENERATOR_MANIFEST.json / the M1F freeze.

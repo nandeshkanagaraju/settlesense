@@ -54,7 +54,7 @@ from settlesense.types import (
 )
 
 REPO = Path(__file__).resolve().parent.parent
-DATA = REPO / "data"
+DATA = REPO / "data" / "dev"
 DAYS = 24
 AS_OF_ALL_DUE = date(2026, 11, 30)
 DUE = date(2026, 9, 10)

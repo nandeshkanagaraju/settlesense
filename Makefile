@@ -48,7 +48,7 @@ help:
 # --- data generation --------------------------------------------------------
 
 gen:
-	$(PYTHON) -m gen.generate --seed 42 --out data/ --days 20
+	$(PYTHON) -m gen.generate --seed 42 --out data/dev/ --days 20
 
 gen-holdout:
 	$(PYTHON) -m gen.generate --seed 999 --out data/holdout/ --days 20 --include-withheld
@@ -123,8 +123,8 @@ config-check:
 # which refuses to be quiet about what it is.
 eval:
 	$(PYTHON) -m eval.run_eval \
-	  --data data \
-	  --truth data/truth_42.json \
+	  --data data/dev \
+	  --truth data/dev/truth_42.json \
 	  --baselines all \
 	  --out reports/eval
 

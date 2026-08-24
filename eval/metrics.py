@@ -46,6 +46,7 @@ __all__ = [
     "TruthView",
     "analyst_minutes_saved",
     "assert_no_ambiguous_money_keys",
+    "cost_per_resolved_exception",
     "population_a",
     "population_b",
     "population_c",
@@ -478,6 +479,23 @@ def analyst_minutes_saved(
 # ---------------------------------------------------------------------------
 # The headline sentence (PDD 8.3) and the money-key guard
 # ---------------------------------------------------------------------------
+
+
+def cost_per_resolved_exception(
+    model_cost_rupees: Money, correct_explanations: int
+) -> Money | None:
+    """PDD 8.4. Model cost divided by correct AI explanations, or None.
+
+    NONE, NEVER A ZeroDivisionError AND NEVER ZERO. With no resolutions the
+    cost per resolution is undefined: raising would crash a report over a run
+    that legitimately explained nothing, and returning 0 would advertise a free
+    AI layer that did no work. Undefined is the only honest third answer.
+    """
+    if correct_explanations < 0:
+        raise ValueError(f"correct_explanations must be >= 0, got {correct_explanations}")
+    if correct_explanations == 0:
+        return None
+    return money(model_cost_rupees / Decimal(correct_explanations))
 
 
 def residual_set_sentence(

@@ -32,7 +32,7 @@ from settlesense.matching.fuzzy_utr import (
 from settlesense.types import BankDirection, BankRow, ExceptionStatus, SettlementBatch, money
 
 REPO = Path(__file__).resolve().parent.parent
-DATA = REPO / "data"
+DATA = REPO / "data" / "dev"
 DAYS = 24
 AS_OF = date(2026, 11, 30)
 DUE = date(2026, 9, 10)

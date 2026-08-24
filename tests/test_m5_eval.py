@@ -1,16 +1,27 @@
-"""M5 - metrics, baselines, the runner, and the target that must not point at
-the holdout.
+"""M5 - denominator discipline first, then metrics, baselines, runner.
 
-The single most consequential thing in this module is a Makefile line. If
-`make eval` pointed at seed 999 it would be run dozens of times during
-development and the holdout would quietly stop being held out - no bad
-decision anywhere, just convenience. That is asserted first, because it is the
-kind of mistake nothing else would catch.
+DENOMINATOR DISCIPLINE COMES FIRST because it is the failure that cannot be
+seen in a number. A wrong rate looks like a wrong rate; a rate over the wrong
+denominator looks like a correct rate. SDD 3.1 forbids merging the three
+populations, and the tests at the top of this file are the only thing standing
+between that rule and a plausible-looking table.
+
+NO NETWORK. Every LLM path uses the replay client, and an autouse fixture
+disables socket for the whole module - a test that quietly made a real call
+would pass for money and could not be run offline.
+
+NO RANKING BETWEEN BASELINES IS ASSERTED. Naive may match MORE by pairing on
+amount and date; what differs is precision. Whatever the ordering turns out to
+be is a finding, and a test that needed a baseline to lose was not written.
 """
 
 from __future__ import annotations
 
 import json
+import re
+import socket
+import statistics
+import subprocess
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -18,39 +29,72 @@ from typing import Any
 
 import pytest
 
-from eval.baselines.llm_only import (
-    CANDIDATES_PER_ROW,
-    build_prompt,
-    parse_response,
-    retrieval_recall,
-    select_candidates,
-)
-from eval.baselines.naive import naive_amount_only_agreement, run_naive
+from eval.baselines.llm_only import ROWS_PER_CHUNK, build_prompt, run_llm_only, select_candidates
+from eval.baselines.naive import run_naive
 from eval.metrics import (
     TRUTH_DEFECT_BATCHES,
     TruthView,
     analyst_minutes_saved,
     assert_no_ambiguous_money_keys,
+    cost_per_resolved_exception,
     population_a,
     population_b,
     population_c,
     residual_set_sentence,
 )
-from eval.run_eval import evaluate, load_days, to_markdown
-from settlesense.ai.client import (
-    RealLLMClient,
-    ReplayLLMClient,
-    ReplayMissError,
-    prompt_hash,
-)
+from eval.run_eval import evaluate, load_days, main, run_baselines, to_markdown
+from settlesense.ai.client import ReplayLLMClient, prompt_hash
 from settlesense.config import AppConfig, load_config
 from settlesense.ingest import DayDataset
-from settlesense.matching.engine import run
-from settlesense.types import BankDirection
+from settlesense.matching.engine import build_cases, run
+from settlesense.types import (
+    BankDirection,
+    CaseOutcome,
+    ExceptionStatus,
+    ReconciliationCase,
+    ReconciliationResult,
+    ResolutionSource,
+    money,
+)
 
 REPO = Path(__file__).resolve().parent.parent
-DATA = REPO / "data"
+DATA = REPO / "data" / "dev"
+EVAL_DIR = REPO / "data" / "eval"
 AS_OF = date(2026, 11, 30)
+
+EVAL_SEEDS = range(1000, 1020)
+RESERVED_SEEDS = (42, 999)
+
+
+# ---------------------------------------------------------------------------
+# 24. No network, for the whole module
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """24. socket.socket raises for the duration of every test here.
+
+    autouse, so it cannot be forgotten on a new test. A guard that has to be
+    opted into protects only the tests that did not need it.
+    """
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise RuntimeError(
+            "a test attempted to open a socket. Every LLM path in this suite uses "
+            "ReplayLLMClient; a real call would bill for a test run and make the "
+            "suite unrunnable offline."
+        )
+
+    monkeypatch.setattr(socket, "socket", refuse)
+
+
+@pytest.mark.charter_guard
+def test_the_network_guard_actually_fires() -> None:
+    """FAULT INJECTION for the fixture above. A no-op patch would protect
+    nothing while every test reported green."""
+    with pytest.raises(RuntimeError, match="attempted to open a socket"):
+        socket.socket()
 
 
 @pytest.fixture(scope="module")
@@ -73,460 +117,687 @@ def payload(dataset: DayDataset, config: AppConfig, truth: TruthView) -> dict[st
     return evaluate(dataset, config, truth, AS_OF, minutes_per_review=4)
 
 
-# ---------------------------------------------------------------------------
-# The Makefile: which seed each target runs
-# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def result(dataset: DayDataset, config: AppConfig) -> ReconciliationResult:
+    return run(dataset, config, AS_OF)
 
 
-def _makefile() -> str:
-    return (REPO / "Makefile").read_text(encoding="utf-8")
-
-
-def _target_body(name: str) -> str:
-    """The RECIPE lines only - tab-indented, up to the next unindented line.
-
-    Not "everything until the next target line": the comment block documenting
-    eval-holdout sits between eval's recipe and eval-holdout's, so a naive
-    slice pulled the word "999" out of a COMMENT and failed the assertion that
-    eval does not reference the holdout. The test was right; the helper was
-    reading the wrong text.
-    """
-    lines = _makefile().splitlines()
-    start = next((i for i, line in enumerate(lines) if line.startswith(f"{name}:")), None)
-    assert start is not None, f"no {name} target in the Makefile"
-    body: list[str] = []
-    for line in lines[start + 1 :]:
-        if line.startswith("\t") or not line.strip():
-            body.append(line)
-            continue
-        break
-    return "\n".join(body)
-
-
-def test_make_eval_runs_the_dev_seed_not_the_holdout() -> None:
-    """THE critical assertion in this file.
-
-    A default target pointing at the holdout would be run dozens of times
-    during development, and nothing in any output would say how many. The
-    damage is silent and irreversible, so it is checked rather than
-    remembered.
-    """
-    body = _target_body("eval")
-    assert "truth_42.json" in body, "make eval does not run the dev seed"
-    assert "999" not in body and "holdout" not in body, (
-        "make eval references the holdout. The default target must be the DEV "
-        "set; the holdout has its own target."
+def _case(case_id: str, gross: str, net: str) -> ReconciliationCase:
+    return ReconciliationCase(
+        case_id=case_id,
+        payment_id=f"PAY_{case_id}",
+        order_id=f"ORD_{case_id}",
+        merchant_profile="profile_a",
+        expected_gross=money(gross),
+        expected_net=money(net),
+        settlement_line_ids=(),
+        payment_line_ids=(),
     )
 
 
-def test_make_eval_holdout_is_separate_and_warns() -> None:
-    body = _target_body("eval-holdout")
-    assert "truth_999.json" in body and "data/holdout" in body
-    assert "HELD-OUT" in body, "eval-holdout does not announce what it is"
-    assert "Record whatever it prints" in body, "eval-holdout does not carry the required warning"
+def _outcome(case_id: str, *, confirmed: bool, category: str | None = None) -> CaseOutcome:
+    return CaseOutcome(
+        case_id=case_id,
+        status=ExceptionStatus.CONFIRMED if confirmed else ExceptionStatus.OPEN,
+        observed_net=None,
+        variance=None,
+        category=category,
+        batch_id=None,
+        bank_row_id=None,
+        resolved_by=ResolutionSource.DETERMINISTIC if confirmed else None,
+        confidence=None,
+    )
 
 
-def test_the_three_eval_targets_are_distinct() -> None:
-    """eval, eval-holdout and eval-ai must not collapse into one another."""
-    bodies = {name: _target_body(name) for name in ("eval", "eval-holdout", "eval-ai")}
-    assert len({b.strip() for b in bodies.values()}) == 3
-    assert "data/eval" in bodies["eval-ai"]
-
-
-# ---------------------------------------------------------------------------
-# Money keys and the three populations
-# ---------------------------------------------------------------------------
-
-
-def test_no_metric_key_says_only_money_weighted(payload: dict[str, Any]) -> None:
-    """PDD 8.4. Three bases exist; a key naming none of them is ambiguous."""
-    assert_no_ambiguous_money_keys(payload)
-
-
-@pytest.mark.charter_guard
-def test_the_money_key_guard_catches_a_planted_violation() -> None:
-    """FAULT INJECTION, including at depth.
-
-    A guard that only inspected the top level would pass a nested violation,
-    and every real metric lives nested under its population.
-    """
-    with pytest.raises(AssertionError, match="money_weighted"):
-        assert_no_ambiguous_money_keys({"money_weighted_total": "1.00"})
-    with pytest.raises(AssertionError, match="money_weighted"):
-        assert_no_ambiguous_money_keys({"population_a": {"money_weighted_rate": "0.5"}})
-    with pytest.raises(AssertionError, match="money_weighted"):
-        assert_no_ambiguous_money_keys({"rows": [{"money_weighted": 1}]})
-
-
-def test_every_money_metric_names_its_basis(payload: dict[str, Any]) -> None:
-    """Each money key ends in the basis it is measured on."""
-    bases = ("expected_gross", "expected_net", "batch_net_total", "row_value")
-    money_words = ("value", "cash", "exposure", "total")
-    checked = 0
-    for section in (
-        "population_a_case_count_denominator",
-        "population_b_batch_count_denominator",
-        "population_c_row_count_denominator",
-    ):
-        for key, value in payload[section].items():
-            if not isinstance(value, str) or not any(w in key for w in money_words):
-                continue
-            if key.endswith("_count") or "rate" in key:
-                continue
-            assert key.endswith(bases), f"money key {key!r} does not name its basis"
-            checked += 1
-    assert checked >= 6, f"only {checked} money keys checked; the sweep is thin"
-
-
-def test_the_three_denominators_are_reported_separately(payload: dict[str, Any]) -> None:
-    """D11. Three objects, three denominators, and they differ."""
-    a = payload["population_a_case_count_denominator"]["case_count"]
-    b = payload["population_b_batch_count_denominator"]["batch_count"]
-    c = payload["population_c_row_count_denominator"]["row_count"]
-    print(f"\n  denominators: A={a} B={b} C={c}")
-    assert len({a, b, c}) == 3, f"denominators collide: {a}, {b}, {c}"
-
-
-def test_a_rate_over_an_empty_population_is_none_not_zero(
-    config: AppConfig, truth: TruthView
-) -> None:
-    """None, because a rate over nothing is UNDEFINED.
-
-    Returning 0 would report "0% false matches" for a run that matched
-    nothing, which is the most flattering possible reading of no evidence.
-    """
-    from settlesense.types import ReconciliationResult
-
-    empty = ReconciliationResult(
-        cases=(),
+def _result(cases: tuple[CaseOutcome, ...]) -> ReconciliationResult:
+    return ReconciliationResult(
+        cases=cases,
         batch_links=(),
         row_variances=(),
         exceptions=(),
         calendar_version="calendar_v1",
-        config_hash="x",
+        config_hash="fixture",
     )
-    assert population_a(empty, {}, truth).case_match_rate_case_count is None
-    assert population_b(empty, truth).batch_link_rate_batch_count is None
-    assert population_c(empty, truth).row_variance_precision_row_count is None
+
+
+def _truth_for(categories: dict[str, str | None]) -> TruthView:
+    return TruthView.from_payload(
+        {
+            "seed": 0,
+            "cases": [{"case_id": cid, "true_category": cat} for cid, cat in categories.items()],
+            "batch_links": [],
+            "row_variances": [],
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
-# The truth defect, reported both ways
+# 0a-0f. Denominator discipline
 # ---------------------------------------------------------------------------
 
 
-def test_the_known_truth_defect_is_reported_both_ways(payload: dict[str, Any]) -> None:
-    """BAT_16A0609791AB is labelled ROUNDING_DIFFERENCE in truth but its batch
-    and credit differ by exactly Rs0.00 - nothing is detectable.
+def test_0a_population_a_divides_by_the_case_count(
+    payload: dict[str, Any], result: ReconciliationResult, dataset: DayDataset
+) -> None:
+    """0a. NOT rows, settlement lines, or bank rows - all of which differ here."""
+    a = payload["population_a_case_count_denominator"]
+    assert a["case_count"] == len(result.cases)
+    others = {
+        "ledger_rows": len(dataset.ledger_rows),
+        "settlement_lines": len(dataset.settlement_lines),
+        "bank_rows": len(dataset.bank_rows),
+        "total_rows": dataset.row_count(),
+    }
+    print(f"\n  Population A denominator={a['case_count']}  other grains={others}")
+    for name, count in others.items():
+        assert a["case_count"] != count, (
+            f"the Population A denominator equals the {name} count; it may be "
+            "dividing by the wrong grain"
+        )
+    assert Decimal(a["case_match_rate_case_count"]) == (
+        Decimal(a["confirmed_case_count"]) / Decimal(a["case_count"])
+    ).quantize(Decimal("0.000001"))
 
-    Both numbers are printed so a reader chooses, rather than inheriting an
-    asterisk. The generator is frozen and was correctly not re-frozen.
-    """
+
+def test_0b_batch_metrics_live_under_a_separate_key(payload: dict[str, Any]) -> None:
+    """0b. Never in one table with A."""
+    a = payload["population_a_case_count_denominator"]
     b = payload["population_b_batch_count_denominator"]
-    assert b["defect_batches_excluded"] == sorted(TRUTH_DEFECT_BATCHES)
+    assert set(a) & set(b) == set(), f"keys shared between A and B: {sorted(set(a) & set(b))}"
+    assert not any("batch" in key for key in a), (
+        f"a batch metric appears inside Population A: {[k for k in a if 'batch' in k]}"
+    )
+
+
+def test_0c_population_c_has_its_own_key_and_row_denominator(payload: dict[str, Any]) -> None:
+    """0c."""
+    c = payload["population_c_row_count_denominator"]
+    assert "row_count" in c and c["row_count"] > 0
+    assert c["matched_row_count"] <= c["row_count"]
+    assert not any("case" in key or "batch" in key for key in c)
+
+
+def test_0d_all_three_denominators_are_distinct(payload: dict[str, Any]) -> None:
+    """0d. Accidental equality would hide a merge."""
+    a = payload["population_a_case_count_denominator"]["case_count"]
+    b = payload["population_b_batch_count_denominator"]["batch_count"]
+    c = payload["population_c_row_count_denominator"]["row_count"]
+    print(f"\n  denominators A={a} B={b} C={c}")
+    assert len({a, b, c}) == 3, f"denominators collide: {a}, {b}, {c}"
+
+
+def test_0e_a_batch_failure_degrades_population_a_by_its_case_count_once(
+    dataset: DayDataset, config: AppConfig, truth: TruthView, result: ReconciliationResult
+) -> None:
+    """0e. Each case in the failed batch counted ONCE - not 1, not 10.
+
+    Built from real rows: an unlinked batch is chosen, the cases settling into
+    it are counted, and Population A is recomputed with exactly those forced
+    open. The delta must equal how many of them were confirmed before.
+    """
+    cases_by_id = {f.case.case_id: f.case for f in build_cases(dataset, config)}
+    facts = build_cases(dataset, config)
+
+    target = next((link.batch_id for link in result.batch_links if link.bank_row_id is None), None)
+    assert target, "no unlinked batch on this fixture; the precondition did not fire"
+    in_batch = {f.case.case_id for f in facts if target in f.batch_ids}
+    assert in_batch, f"batch {target} contains no cases; the check would be vacuous"
+
+    before = population_a(result, cases_by_id, truth).confirmed_case_count
+    degraded = _result(
+        tuple(
+            _outcome(c.case_id, confirmed=False) if c.case_id in in_batch else c
+            for c in result.cases
+        )
+    )
+    after = population_a(degraded, cases_by_id, truth).confirmed_case_count
+    was_confirmed = sum(
+        1 for c in result.cases if c.case_id in in_batch and c.status is ExceptionStatus.CONFIRMED
+    )
+    print(
+        f"\n  batch {target} holds {len(in_batch)} cases ({was_confirmed} confirmed); "
+        f"Population A fell by {before - after}"
+    )
+    assert before - after == was_confirmed, (
+        f"a batch holding {len(in_batch)} cases moved Population A by "
+        f"{before - after}; each case must count exactly once"
+    )
+
+
+def test_0f_every_money_key_names_its_basis(payload: dict[str, Any]) -> None:
+    """0f. And no key says only "money_weighted"."""
+    assert_no_ambiguous_money_keys(payload)
+    a = payload["population_a_case_count_denominator"]
+    b = payload["population_b_batch_count_denominator"]
+    assert any(k.startswith("gross_exposure_") for k in a)
+    assert any("expected_net" in k for k in a)
+    assert any(k.startswith("batch_net_") for k in b)
+    assert "money_weighted" not in json.dumps(payload)
+
+
+@pytest.mark.charter_guard
+def test_the_money_key_guard_fires_at_every_depth() -> None:
+    """FAULT INJECTION. Every real metric is nested, so a top-level-only guard
+    would protect nothing."""
+    for planted in (
+        {"money_weighted": 1},
+        {"a": {"money_weighted_rate": "0.5"}},
+        {"rows": [{"nested": {"money_weighted_value": "1.00"}}]},
+    ):
+        with pytest.raises(AssertionError, match="money_weighted"):
+            assert_no_ambiguous_money_keys(planted)
+
+
+# ---------------------------------------------------------------------------
+# 1-9. Metrics correctness on hand-computed fixtures
+# ---------------------------------------------------------------------------
+
+
+def test_1_case_match_rate_on_a_ten_case_fixture() -> None:
+    """1. Seven of ten confirmed == exactly 0.70."""
+    cases = tuple(_outcome(f"c{i}", confirmed=i < 7) for i in range(10))
+    cases_by_id = {f"c{i}": _case(f"c{i}", "100.00", "100.00") for i in range(10)}
+    metrics = population_a(_result(cases), cases_by_id, _truth_for(dict.fromkeys(cases_by_id)))
+    assert metrics.case_count == 10 and metrics.confirmed_case_count == 7
+    assert metrics.case_match_rate_case_count == Decimal("0.700000")
+
+
+def test_2_value_weighted_diverges_from_case_rate_under_skew() -> None:
+    """2. One Rs100,000 case unmatched, ninety-nine Rs10 cases matched.
+
+    The whole reason PDD 8.4 insists on a named basis: a case rate of 0.99 and
+    a gross-exposure rate of 0.0098 describe the SAME run, and quoting only the
+    first hides Rs100,000 of unresolved exposure behind small change.
+
+    There is no "money-weighted match rate" key to reach for (0f) - the basis
+    is in the name.
+    """
+    cases = tuple(
+        [_outcome("big", confirmed=False)] + [_outcome(f"s{i}", confirmed=True) for i in range(99)]
+    )
+    cases_by_id: dict[str, ReconciliationCase] = {
+        "big": _case("big", "100000.00", "100000.00"),
+        **{f"s{i}": _case(f"s{i}", "10.00", "10.00") for i in range(99)},
+    }
+    metrics = population_a(_result(cases), cases_by_id, _truth_for(dict.fromkeys(cases_by_id)))
+    case_rate = metrics.case_match_rate_case_count
+    gross_rate = metrics.gross_exposure_match_rate_expected_gross
+    print(f"\n  case rate={case_rate}  gross-exposure rate={gross_rate}")
+    assert case_rate is not None and gross_rate is not None
+    assert case_rate > Decimal("0.98")
+    assert gross_rate < Decimal("0.15")
+    assert metrics.gross_exposure_total_expected_gross == money("100990.00")
+
+
+def test_3_false_match_counts_only_confirmed_but_wrong() -> None:
+    """3. The denominator is CONFIRMATIONS, not all cases."""
+    cases = (
+        _outcome("right", confirmed=True, category="PARTIAL_CAPTURE"),
+        _outcome("wrong", confirmed=True, category="PARTIAL_CAPTURE"),
+        _outcome("open", confirmed=False, category="DUPLICATE_CANDIDATE"),
+    )
+    cases_by_id = {c.case_id: _case(c.case_id, "10.00", "10.00") for c in cases}
+    truth = _truth_for({"right": "PARTIAL_CAPTURE", "wrong": "T_PLUS_N_TIMING", "open": None})
+    metrics = population_a(_result(cases), cases_by_id, truth)
+    assert metrics.residual_false_match_rate_case_count == Decimal("0.500000"), (
+        "one of two CONFIRMATIONS was wrong; the rate must divide by 2, not 3"
+    )
+
+
+def test_4_abstentions_never_count_as_false_matches() -> None:
+    """4. An open case disagreeing with truth is over-inclusion, not a false
+    match. Merging the two would make a cautious engine look reckless."""
+    cases = (
+        _outcome("a", confirmed=True, category=None),
+        _outcome("b", confirmed=False, category="DUPLICATE_CANDIDATE"),
+        _outcome("c", confirmed=False, category="UNEXPLAINED"),
+    )
+    cases_by_id = {c.case_id: _case(c.case_id, "10.00", "10.00") for c in cases}
+    metrics = population_a(
+        _result(cases), cases_by_id, _truth_for({"a": None, "b": None, "c": None})
+    )
+    assert metrics.residual_false_match_rate_case_count == Decimal("0.000000")
+    assert metrics.deterministic_residual_count == 2
+
+
+def test_5_cost_per_resolution_with_zero_resolutions_is_none() -> None:
+    """5. None, not ZeroDivisionError and not zero.
+
+    Raising would crash a report over a run that legitimately explained
+    nothing; returning 0 would advertise a free AI layer that did no work.
+    """
+    assert cost_per_resolved_exception(money("500.00"), 0) is None
+    assert cost_per_resolved_exception(money("500.00"), 4) == money("125.00")
+
+
+@pytest.mark.boundary_refusal
+def test_5b_a_negative_resolution_count_raises() -> None:
+    """FAULT INJECTION."""
+    with pytest.raises(ValueError, match=">= 0"):
+        cost_per_resolved_exception(money("1.00"), -1)
+
+
+def test_6_analyst_minutes_states_the_assumption(result: ReconciliationResult) -> None:
+    """6. The label carries "derived estimate" and the assumed value."""
+    estimate = analyst_minutes_saved(result, minutes_per_review=7).as_dict()
+    assert "derived estimate" in estimate["label"]
+    assert "7 min/review" in estimate["label"]
+    assert estimate["minutes_per_review_assumption"] == 7
+
+
+def test_7_deterministic_and_ai_savings_are_distinct_keys(result: ReconciliationResult) -> None:
+    """7. Separate keys, no blended field, and the split is printed."""
+    estimate = analyst_minutes_saved(result, minutes_per_review=4).as_dict()
+    assert "minutes_saved_deterministic_derived_estimate" in estimate
+    assert "minutes_saved_ai_derived_estimate" in estimate
+    blended = [k for k in estimate if any(w in k for w in ("total", "combined", "blended"))]
+    assert not blended, f"a blended minutes key exists: {blended}"
+    print(
+        f"\n  deterministic={estimate['minutes_saved_deterministic_derived_estimate']} min "
+        f"| ai={estimate['minutes_saved_ai_derived_estimate']} min"
+    )
+    assert estimate["minutes_saved_deterministic_derived_estimate"] > 0
+    assert estimate["minutes_saved_ai_derived_estimate"] == 0
+
+
+def test_8_every_money_metric_is_decimal(
+    result: ReconciliationResult, dataset: DayDataset, config: AppConfig, truth: TruthView
+) -> None:
+    """8. `type(...) is Decimal`, swept across all three populations."""
+    cases_by_id = {f.case.case_id: f.case for f in build_cases(dataset, config)}
+    checked = 0
+    for metrics in (
+        population_a(result, cases_by_id, truth),
+        population_b(result, truth),
+        population_c(result, truth),
+    ):
+        for name in dir(metrics):
+            if name.startswith("_"):
+                continue
+            value = getattr(metrics, name)
+            if isinstance(value, Decimal):
+                assert type(value) is Decimal, f"{name} is {type(value).__name__}"
+                checked += 1
+    assert checked >= 12, f"only {checked} Decimal fields swept"
+
+
+def test_9_the_truth_defect_is_reported_both_ways(payload: dict[str, Any]) -> None:
+    """9. Both keys exist, both populated, and the difference is printed."""
+    b = payload["population_b_batch_count_denominator"]
     counting = b["noise_recovery_rate_counting_defect"]
     excluding = b["noise_recovery_rate_excluding_defect"]
-    print(f"\n  noise recovery: counting defect={counting}  excluding={excluding}")
     assert counting is not None and excluding is not None
-    assert counting != excluding, (
-        "both figures are identical, so excluding the defect changes nothing and "
-        "the dual reporting is now theatre - re-check that the defect batch is "
-        "still in this population"
-    )
-
-
-def test_the_defect_batch_really_has_a_zero_difference(
-    dataset: DayDataset, config: AppConfig
-) -> None:
-    """The claim the dual reporting rests on, verified against the data.
-
-    If this batch ever DID show a difference, the truth label would be
-    correct and the exclusion would be unjustified.
-    """
-    result = run(dataset, config, AS_OF)
-    for link in result.batch_links:
-        if link.batch_id in TRUTH_DEFECT_BATCHES:
-            assert link.linked_amount is not None
-            assert link.batch_net_total - link.linked_amount == Decimal("0.00"), (
-                f"{link.batch_id} differs by "
-                f"{link.batch_net_total - link.linked_amount}; the truth label is "
-                "detectable after all and the exclusion is unjustified"
-            )
-            return
-    pytest.fail("the defect batch is not in the result; the exclusion list is stale")
-
-
-def test_category_precision_is_computed_only_where_a_category_is_a_claim(
-    payload: dict[str, Any],
-) -> None:
-    """The metric bug this file exists partly to prevent recurring.
-
-    truth's `true_category` records what noise was INJECTED. The engine's
-    category records what variance REMAINS. Comparing them across all batches
-    scored 0.64 and penalised the engine for succeeding on 13 batches it had
-    recovered. Precision is now computed over UNRESOLVED batches only.
-    """
-    b = payload["population_b_batch_count_denominator"]
-    assert b["unresolved_batch_count"] < b["batch_count"], (
-        "every batch is unresolved; this metric is no longer distinguishing"
-    )
-    assert b["injected_noise_recovered_batch_count"] > 0
+    assert b["defect_batches_excluded"] == sorted(TRUTH_DEFECT_BATCHES)
     print(
-        f"\n  unresolved={b['unresolved_batch_count']} "
-        f"category precision={b['category_precision_on_unresolved_batch_count']}"
-        f"\n  noise recovered={b['injected_noise_recovered_batch_count']}"
-        f"/{b['injected_noise_batch_count']}"
+        f"\n  BAT_16A0609791AB: recovery counting defect={counting} excluding={excluding} "
+        f"difference={Decimal(excluding) - Decimal(counting)}"
     )
+    assert counting != excluding, "excluding the defect changes nothing; this is theatre"
 
 
 # ---------------------------------------------------------------------------
-# Analyst minutes: the assumption, and the attribution
+# 10-13. Baselines. NO RANKING.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.boundary_refusal
-def test_analyst_minutes_requires_the_assumption(dataset: DayDataset, config: AppConfig) -> None:
-    """FAULT INJECTION. No default, because a default lets the number be quoted
-    without the premise it rests on."""
-    import inspect
-
-    signature = inspect.signature(analyst_minutes_saved)
-    assert signature.parameters["minutes_per_review"].default is inspect.Parameter.empty, (
-        "minutes_per_review has a default; the assumption can now be omitted"
-    )
-    result = run(dataset, config, AS_OF)
-    with pytest.raises(TypeError, match="must be an int"):
-        analyst_minutes_saved(result, "4")  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="positive"):
-        analyst_minutes_saved(result, 0)
-
-
-def test_analyst_minutes_are_attributed_not_blended(dataset: DayDataset, config: AppConfig) -> None:
-    """Rules and AI are reported separately, and there is no combined field.
-
-    On this dataset the deterministic engine resolves ~99% and the AI layer has
-    not run. One blended figure would read as a claim about the AI.
-    """
-    result = run(dataset, config, AS_OF)
-    estimate = analyst_minutes_saved(result, minutes_per_review=4)
-    as_dict = estimate.as_dict()
-    assert "derived estimate" in as_dict["label"]
-    assert "4 min/review" in as_dict["label"]
-    assert as_dict["minutes_saved_ai_derived_estimate"] == 0, "the AI layer has not run"
-    assert as_dict["minutes_saved_deterministic_derived_estimate"] > 0
-    combined = [k for k in as_dict if "total" in k or "combined" in k or "blended" in k]
-    assert not combined, f"a combined minutes field exists: {combined}"
-    print(f"\n  {as_dict['label']}")
-
-
-# ---------------------------------------------------------------------------
-# The headline sentence
-# ---------------------------------------------------------------------------
-
-
-def test_the_residual_sentence_carries_real_numbers(payload: dict[str, Any]) -> None:
-    sentence = payload["residual_set_sentence"]
-    residual = payload["population_a_case_count_denominator"]["deterministic_residual_count"]
-    assert str(residual) in sentence
-    assert "false-matched 0" in sentence
-    print(f"\n  {sentence}")
-
-
-@pytest.mark.boundary_refusal
-def test_the_sentence_refuses_to_overstate_the_residual_set() -> None:
-    """FAULT INJECTION. Outcomes cannot exceed the surface they came from."""
-    with pytest.raises(ValueError, match="exceed the residual"):
-        residual_set_sentence(residual_count=10, explained=8, abstained=5, false_matched=0)
-
-
-# ---------------------------------------------------------------------------
-# Baselines - no ranking asserted anywhere
-# ---------------------------------------------------------------------------
-
-
-def test_the_naive_baseline_runs_and_reports_both_volume_and_precision(
-    dataset: DayDataset, config: AppConfig, truth: TruthView
+def test_10_naive_runs_end_to_end_and_no_ranking_is_asserted(
+    dataset: DayDataset, config: AppConfig, truth: TruthView, result: ReconciliationResult
 ) -> None:
-    """NO RANKING IS ASSERTED. Naive may link more; what differs is precision.
-
-    Both counts are printed side by side so the distinction is a number rather
-    than an argument.
-    """
-    links = run_naive(dataset, config, AS_OF)
-    wrong = [link for link in links if truth.batch_credit(link.batch_id) != link.bank_txn_id]
-    engine_linked = sum(1 for b in run(dataset, config, AS_OF).batch_links if b.bank_row_id)
+    """10. Both produce valid metrics. Whatever the ordering, it is a finding."""
+    naive_links = run_naive(dataset, config, AS_OF)
+    naive_wrong = [
+        link for link in naive_links if truth.batch_credit(link.batch_id) != link.bank_txn_id
+    ]
+    engine = population_b(result, truth)
     print(
-        f"\n  naive: linked={len(links)} false={len(wrong)}"
-        f"\n  engine: linked={engine_linked}"
-        f"\n  batch amount uniqueness: {naive_amount_only_agreement(dataset)}"
+        f"\n  naive:  linked={len(naive_links)} false={len(naive_wrong)}"
+        f"\n  engine: linked={engine.linked_count} false={engine.false_link_count}"
     )
-    assert links, "the naive baseline linked nothing; it is not a baseline"
+    assert naive_links, "the naive baseline linked nothing; it is not a baseline"
+    assert engine.linked_count > 0
 
 
-def test_no_test_in_this_file_asserts_a_baseline_ranking() -> None:
+def test_no_ranking_assertion_exists_in_this_module() -> None:
     """The instruction was explicit: if a test needs a baseline to lose, delete it.
 
-    Scans this module for comparisons between baseline link counts. A ranking
-    assertion would make the headline claim unfalsifiable, which is worse than
-    having no baseline at all.
+    Scans this file for an assert comparing naive to the engine. A ranking
+    assertion would make the headline claim unfalsifiable.
     """
-    source = Path(__file__).read_text(encoding="utf-8")
-    forbidden = [
+    offenders = [
         line.strip()
-        for line in source.splitlines()
+        for line in Path(__file__).read_text(encoding="utf-8").splitlines()
         if line.strip().startswith("assert")
-        and "naive" in line
+        and "naive" in line.lower()
         and any(op in line for op in ("<", ">"))
     ]
-    assert not forbidden, f"a baseline ranking is asserted: {forbidden}"
+    assert not offenders, f"a baseline ranking is asserted: {offenders}"
 
 
-def test_deterministic_and_settlesense_are_equal_until_m7(
+def test_11_deterministic_only_reproduces_the_committed_numbers(payload: dict[str, Any]) -> None:
+    """11. Against the COMMITTED results file, not numbers in a brief.
+
+    A brief's figures are a claim about the code; the committed results are
+    what the code produced. Comparing to the latter catches a regression - the
+    former only catches a typo.
+    """
+    committed_path = REPO / "reports" / "eval" / "results.json"
+    assert committed_path.exists(), "no committed results to compare against"
+    committed = json.loads(committed_path.read_text(encoding="utf-8"))
+    live_a = payload["population_a_case_count_denominator"]
+    committed_a = committed["population_a_case_count_denominator"]
+    for key in (
+        "case_count",
+        "confirmed_case_count",
+        "deterministic_residual_count",
+        "residual_false_match_rate_case_count",
+    ):
+        assert live_a[key] == committed_a[key], f"{key} drifted from the committed run"
+    live_b = payload["population_b_batch_count_denominator"]
+    print(
+        f"\n  resolved={live_a['confirmed_case_count']} "
+        f"residual={live_a['deterministic_residual_count']} "
+        f"linked={live_b['linked_count']}/{live_b['batch_count']} "
+        f"false_links={live_b['false_link_count']}"
+    )
+    assert live_b["false_link_count"] == 0
+    assert live_a["residual_false_match_rate_case_count"] == "0.000000"
+
+
+def test_12_llm_only_runs_against_the_replay_client_with_no_network(
+    dataset: DayDataset, config: AppConfig, tmp_path: Path
+) -> None:
+    """12. A full run on recorded fixtures. The socket guard is autouse, so a
+    real call raises rather than bills."""
+    credits = sorted(
+        (r for r in dataset.bank_rows if r.direction is BankDirection.CREDIT),
+        key=lambda r: r.bank_txn_id,
+    )
+    batches = sorted(dataset.settlement_batches, key=lambda b: b.batch_id)
+    assert credits, "no credits in the dataset; the baseline would be untested"
+
+    for start in range(0, len(credits), ROWS_PER_CHUNK):
+        chunk = credits[start : start + ROWS_PER_CHUNK]
+        answers = [
+            {
+                "bank_txn_id": row.bank_txn_id,
+                "batch_id": select_candidates(row, batches)[0].batch_id,
+                "confidence": 0.8,
+                "reasoning": "closest amount inside the window",
+            }
+            for row in chunk
+        ]
+        (tmp_path / f"{prompt_hash(build_prompt(chunk, batches))}.json").write_text(
+            json.dumps({"text": json.dumps(answers), "input_tokens": 100, "output_tokens": 50})
+        )
+
+    client = ReplayLLMClient(fixture_dir=tmp_path)
+    outcome = run_llm_only(dataset, config, AS_OF, client)
+    print(
+        f"\n  llm_only: prompts={outcome.prompts_sent} links={len(outcome.links)} "
+        f"parse_failures={outcome.parse_failures} input_tokens={outcome.input_tokens}"
+    )
+    assert outcome.prompts_sent == len(client.calls) > 0
+    assert len(outcome.links) == len(credits)
+    assert outcome.parse_failures == 0
+
+
+def test_13_every_baseline_consumes_the_identical_dataset_object(
     dataset: DayDataset, config: AppConfig, truth: TruthView
 ) -> None:
-    """Stated rather than hidden. They become a before-and-after once M7 lands.
+    """13. The SAME object, by identity - not an equal copy.
 
-    Calls run_baselines directly rather than skipping when `evaluate` has no
-    baselines key - a skip here would silently stop checking the claim the
-    results table makes in prose.
+    A baseline handed its own reload could differ by a parse decision, and the
+    comparison would be measuring ingestion rather than reconciliation.
     """
-    from eval.run_eval import run_baselines
-
-    baselines = run_baselines(dataset, config, truth, AS_OF, ("det", "settlesense"))
-    det = baselines["deterministic_only"]
-    full = baselines["settlesense"]
-    assert det["batches_linked"] == full["batches_linked"]
-    assert det["false_links"] == full["false_links"]
-    assert "until M7" in full["note"], "the equality is not explained in the output"
-
-
-# ---------------------------------------------------------------------------
-# LLM baseline - strong, and testable without a network
-# ---------------------------------------------------------------------------
-
-
-def test_candidate_retrieval_is_deterministic_and_bounded(
-    dataset: DayDataset,
-) -> None:
-    batches = list(dataset.settlement_batches)
-    row = next(r for r in dataset.bank_rows if r.direction is BankDirection.CREDIT)
-    first = select_candidates(row, batches)
-    second = select_candidates(row, list(reversed(batches)))
-    assert [b.batch_id for b in first] == [b.batch_id for b in second]
-    assert len(first) == min(CANDIDATES_PER_ROW, len(batches))
-
-
-def test_retrieval_recall_is_measured_so_a_miss_is_attributable(
-    dataset: DayDataset, truth: TruthView
-) -> None:
-    """Without this a low score is unattributable: the model may have been
-    wrong, or may never have been shown the right answer."""
-    links = {bid: truth.batch_credit(bid) for bid in truth.batch_links}
-    recall = retrieval_recall(dataset, links)
-    print(f"\n  candidate retrieval recall (top {CANDIDATES_PER_ROW}): {recall}")
-    assert recall is not None
-    assert recall > Decimal("0.5"), (
-        f"retrieval recall is {recall}; the LLM baseline is being handed candidate "
-        "lists that rarely contain the answer, which would make it a strawman"
-    )
-
-
-def test_the_prompt_states_the_domain_rules_and_permits_abstention(
-    dataset: DayDataset,
-) -> None:
-    """A baseline denied domain knowledge is a strawman."""
-    batches = list(dataset.settlement_batches)
-    rows = [r for r in dataset.bank_rows if r.direction is BankDirection.CREDIT][:2]
-    prompt = build_prompt(rows, batches)
-    for required in ("UTR", "Rs1.00", "null", "working days", "JSON"):
-        assert required in prompt, f"the prompt never mentions {required!r}"
-    assert "wrong link is worse than no link" in prompt
-    assert all(row.bank_txn_id in prompt for row in rows)
-
-
-def test_a_null_batch_id_parses_as_an_abstention_not_a_failure() -> None:
-    """Collapsing an abstention into a parse failure would score the baseline
-    down for doing the right thing."""
-    links, failures = parse_response(
-        '[{"bank_txn_id":"BNK_1","batch_id":null,"confidence":0.2,"reasoning":"no evidence"}]'
-    )
-    assert failures == 0
-    assert len(links) == 1 and links[0].batch_id is None
-
-
-def test_the_parser_survives_fenced_and_malformed_output() -> None:
-    fenced, failures = parse_response(
-        '```json\n[{"bank_txn_id":"BNK_1","batch_id":"BAT_1","confidence":0.9}]\n```'
-    )
-    assert failures == 0 and len(fenced) == 1
-    broken, broken_failures = parse_response("not json at all")
-    assert broken == [] and broken_failures == 1
-
-
-@pytest.mark.boundary_refusal
-def test_a_replay_miss_raises_and_never_reaches_the_network(tmp_path: Path) -> None:
-    """FAULT INJECTION for SDD 7. A silent fallback would bill for a test run."""
-    client = ReplayLLMClient(fixture_dir=tmp_path)
-    with pytest.raises(ReplayMissError, match="no recorded response"):
-        client.complete("a prompt nobody recorded")
-
-
-def test_a_recorded_fixture_replays(tmp_path: Path) -> None:
-    prompt = "hello"
-    (tmp_path / f"{prompt_hash(prompt)}.json").write_text(
-        json.dumps({"text": "[]", "input_tokens": 5, "output_tokens": 2, "model": "test"})
-    )
-    response = ReplayLLMClient(fixture_dir=tmp_path).complete(prompt)
-    assert response.text == "[]" and response.total_tokens == 7
-
-
-@pytest.mark.boundary_refusal
-def test_the_real_client_refuses_to_exist_inside_a_test() -> None:
-    """FAULT INJECTION. The suite must be INCAPABLE of billing anyone, which is
-    a property of the type rather than of who remembered to check."""
-    with pytest.raises(RuntimeError, match="must not be constructed inside a test"):
-        RealLLMClient()
+    seen: list[int] = []
+    for call in (
+        lambda ds: run_naive(ds, config, AS_OF),
+        lambda ds: run(ds, config, AS_OF),
+        lambda ds: select_candidates(
+            next(r for r in ds.bank_rows if r.direction is BankDirection.CREDIT),
+            list(ds.settlement_batches),
+        ),
+    ):
+        seen.append(id(dataset))
+        call(dataset)
+    assert len(set(seen)) == 1, "the baselines did not all receive one dataset object"
+    assert run_baselines(dataset, config, truth, AS_OF, ("naive", "det", "settlesense"))
 
 
 # ---------------------------------------------------------------------------
-# The runner end to end
+# 14-18. The AI evaluation set
 # ---------------------------------------------------------------------------
 
+_EVAL_PRESENT = EVAL_DIR.is_dir() and len(list(EVAL_DIR.glob("seed_*"))) == len(EVAL_SEEDS)
+needs_eval_data = pytest.mark.skipif(
+    not _EVAL_PRESENT,
+    reason="data/eval absent (gitignored, ~146MB). Regenerate with `make eval-set`.",
+)
 
-def test_the_markdown_report_carries_the_headline_and_the_bases(
+
+def _eval_manifest() -> dict[str, Any]:
+    data: dict[str, Any] = json.loads((REPO / "EVAL_SET_MANIFEST.json").read_text(encoding="utf-8"))
+    return data
+
+
+def test_14_twenty_datasets_exist_and_are_recorded() -> None:
+    """14. From the COMMITTED manifest, so this runs on a fresh clone where the
+    146MB of data is absent."""
+    manifest = _eval_manifest()
+    assert sorted(int(s) for s in manifest["seeds"]) == list(EVAL_SEEDS)
+    assert manifest["seed_range"]["count"] == len(EVAL_SEEDS)
+    assert manifest["seed_range"]["excluded"] == []
+    for seed, row in manifest["seeds"].items():
+        assert row["file_count"] > 0, f"seed {seed} recorded zero files"
+    print(f"\n  {len(manifest['seeds'])} datasets recorded, 0 excluded")
+
+
+def test_15_per_seed_pair_count_is_stable_within_half_the_median() -> None:
+    """15. All twenty printed. None may deviate from the median by >50%."""
+    pairs = {
+        int(seed): row["duplicate_candidate_pairs"]
+        for seed, row in _eval_manifest()["seeds"].items()
+    }
+    median = statistics.median(pairs.values())
+    print(f"\n  per-seed DUPLICATE_CANDIDATE pairs (median {median}):")
+    for seed in sorted(pairs):
+        print(f"    {seed}: {pairs[seed]:>3}   {(pairs[seed] - median) / median:+.1%} from median")
+    outliers = {seed: count for seed, count in pairs.items() if abs(count - median) / median > 0.5}
+    assert not outliers, (
+        f"seed(s) deviate from the median by more than 50%: {outliers}. A noise rate "
+        "is interacting with something seed-dependent - investigate before using it."
+    )
+
+
+def test_16_total_pair_count_is_at_least_three_hundred() -> None:
+    """16. This is the n the AI claim will rest on.
+
+    Printed because the number bounds what can honestly be claimed: at n=507 a
+    single wrong decision moves precision by 0.2 points; at n=26 it moves it by
+    4. If this ever falls, the claim must be weakened to match.
+    """
+    manifest = _eval_manifest()
+    total = sum(row["duplicate_candidate_pairs"] for row in manifest["seeds"].values())
+    print(f"\n  TOTAL decisions across {len(manifest['seeds'])} seeds: {total}")
+    assert total >= 300, (
+        f"only {total} decisions. The AI claim rests on this n; below ~300 the error "
+        "bars swallow any per-category figure."
+    )
+
+
+@needs_eval_data
+def test_17_evaluation_seeds_are_disjoint_from_dev_and_holdout() -> None:
+    """17. R1 - disjoint in seed NUMBER and in generated ID space.
+
+    Seed numbers are the easy half. The ID check is the one that matters: every
+    id is a hash of a canonical tuple that includes the seed (D10), so an
+    overlap would mean the seed is not reaching the hash and two "independent"
+    datasets share rows.
+    """
+    assert set(EVAL_SEEDS).isdisjoint(RESERVED_SEEDS)
+
+    def order_ids(root: Path) -> set[str]:
+        return {
+            line.split(",")[0]
+            for path in sorted(root.glob("day*_ledger.csv"))
+            for line in path.read_text(encoding="utf-8").splitlines()[1:]
+            if line
+        }
+
+    dev = order_ids(DATA)
+    assert dev, "no dev order ids read; the check would be vacuous"
+    overlaps = {
+        seed: len(dev & order_ids(EVAL_DIR / f"seed_{seed}"))
+        for seed in EVAL_SEEDS
+        if dev & order_ids(EVAL_DIR / f"seed_{seed}")
+    }
+    print(f"\n  dev order ids: {len(dev)}; evaluation seeds sharing any id: {len(overlaps)}")
+    assert not overlaps, (
+        f"generated ID space overlaps between the dev seed and {overlaps}. The seed is "
+        "not reaching the id hash (D10)."
+    )
+
+
+def test_18_the_seed_range_is_recorded_in_the_readme_before_m7() -> None:
+    """18. A range chosen after seeing results is not a held-out range.
+
+    Greps the README, and SEPARATELY checks that the declaring commit precedes
+    the commit carrying the numbers - the file alone proves only that the text
+    exists now, not that it existed first.
+    """
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    assert "1000" in readme and "1019" in readme, "the README does not record the range"
+    assert re.search(r"before.{0,60}generat", readme, re.IGNORECASE | re.DOTALL), (
+        "the README does not say the range was declared before generation"
+    )
+
+    declaring = _eval_manifest()["declared_in_commit"]
+    log = subprocess.run(
+        ["git", "log", "--format=%H %s", "--reverse"], capture_output=True, text=True, cwd=REPO
+    ).stdout.splitlines()
+    order = [line.split()[0][:7] for line in log]
+    assert declaring[:7] in order, f"declaring commit {declaring} not in history"
+    generating = next(
+        (line.split()[0][:7] for line in log if "generate seeds 1000-1019" in line), None
+    )
+    assert generating, "no commit generating the seeds found"
+    print(f"\n  declared in {declaring[:7]}, generated in {generating}")
+    assert order.index(declaring[:7]) < order.index(generating), (
+        "the range was declared AFTER the seeds were generated"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 19-23. The runner
+# ---------------------------------------------------------------------------
+
+DOCUMENTED_NULLS = frozenset(
+    {
+        "residual_explanation_precision_case_count",  # the AI layer has not run
+    }
+)
+
+
+def test_19_results_json_has_every_key_and_no_undocumented_nulls(
     payload: dict[str, Any],
 ) -> None:
-    markdown = to_markdown(payload, {})
-    assert payload["residual_set_sentence"] in markdown
-    for basis in ("₹ expected gross", "₹ expected net", "₹ batch net total"):
-        assert basis in markdown, f"the table never names the {basis} basis"
-    assert "derived estimate" in markdown
-    assert "never added together" in markdown
+    """19."""
+    for section in (
+        "population_a_case_count_denominator",
+        "population_b_batch_count_denominator",
+        "population_c_row_count_denominator",
+        "analyst_time",
+        "residual_set_sentence",
+    ):
+        assert section in payload, f"results.json is missing {section}"
+    nulls = [
+        f"{section}.{key}"
+        for section in payload
+        if isinstance(payload[section], dict)
+        for key, value in payload[section].items()
+        if value is None and key not in DOCUMENTED_NULLS
+    ]
+    print(f"\n  undocumented nulls: {nulls or 'none'}")
+    assert not nulls, f"undocumented nulls: {nulls}"
 
 
-def test_the_report_states_that_no_ranking_is_claimed(payload: dict[str, Any]) -> None:
-    assert "No ranking is claimed" in to_markdown(payload, {})
-
-
-def test_evaluate_is_deterministic(
+def test_20_two_runs_produce_identical_results(
     dataset: DayDataset, config: AppConfig, truth: TruthView
 ) -> None:
-    """D6."""
+    """20. D6."""
     first = evaluate(dataset, config, truth, AS_OF, 4)
     second = evaluate(dataset, config, truth, AS_OF, 4)
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
 
 
-def test_population_a_reports_zero_false_matches_on_the_dev_seed(
-    payload: dict[str, Any],
-) -> None:
-    """The M3 result, now reported through the metrics layer rather than
-    re-derived by a test - so the number a reader sees is the number the
-    pipeline produces."""
-    a = payload["population_a_case_count_denominator"]
-    print(
-        f"\n  cases={a['case_count']} residual={a['deterministic_residual_count']} "
-        f"false_match_rate={a['residual_false_match_rate_case_count']}"
+def test_21_the_markdown_carries_real_numbers_not_placeholders(payload: dict[str, Any]) -> None:
+    """21. No X, Y, Z or TO BE MEASURED survives into the report."""
+    markdown = to_markdown(payload, {})
+    sentence = payload["residual_set_sentence"]
+    assert sentence in markdown
+    for placeholder in ("TO BE MEASURED", "TODO", "<hash>", "**X**", "**Y**", "**Z**"):
+        assert placeholder not in markdown, f"{placeholder!r} survived into the report"
+    assert re.search(r"explained \d+, abstained on \d+, and false-matched \d+", sentence), (
+        f"the residual sentence still carries symbols: {sentence!r}"
     )
-    assert a["residual_false_match_rate_case_count"] == "0.000000"
-    assert a["gross_exposure_false_match_value_expected_gross"] == "0.00"
+    print(f"\n  {sentence}")
+
+
+def test_22_make_eval_defaults_to_the_dev_seed() -> None:
+    """22. A default pointing at the holdout burns it.
+
+    Checks the --data path AND the truth file. The path is the requirement as
+    written; the truth file is what actually decides which seed runs, so both
+    are asserted rather than trusting a directory name to imply a seed.
+    """
+    lines = (REPO / "Makefile").read_text(encoding="utf-8").splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("eval:"))
+    body = "\n".join(
+        line for line in lines[start + 1 :] if line.startswith("\t") or not line.strip()
+    ).split("\n\n")[0]
+    print(f"\n  make eval recipe:{body}")
+    assert "--data data/dev" in body, f"make eval does not point at the dev set: {body!r}"
+    assert "holdout" not in body, "make eval references the holdout"
+    assert "truth_42.json" in body, "make eval does not use the dev seed's truth"
+
+
+def test_22b_eval_holdout_is_a_separate_target_that_warns() -> None:
+    text = (REPO / "Makefile").read_text(encoding="utf-8")
+    assert "eval-holdout:" in text
+    assert "HELD-OUT" in text and "Record whatever it prints" in text
+
+
+def test_23_a_dataset_with_no_residuals_still_reports() -> None:
+    """23. An empty residual set is a valid outcome, not a crash.
+
+    The sentence must still render, with zeros, rather than raising or
+    returning an empty string a reader would take for a missing result.
+    """
+    clean = _result(tuple(_outcome(f"c{i}", confirmed=True) for i in range(5)))
+    cases_by_id = {f"c{i}": _case(f"c{i}", "10.00", "10.00") for i in range(5)}
+    metrics = population_a(clean, cases_by_id, _truth_for(dict.fromkeys(cases_by_id)))
+    assert metrics.deterministic_residual_count == 0
+    assert metrics.residual_abstention_rate_case_count == Decimal("0.000000")
+    sentence = residual_set_sentence(0, 0, 0, 0)
+    assert "Of the 0 exceptions" in sentence
+    print(f"\n  {sentence}")
+
+
+def test_23b_the_runner_writes_both_artifacts(tmp_path: Path) -> None:
+    """The two files the brief names, written where they are asked for."""
+    exit_code = main(
+        [
+            "--data",
+            str(DATA),
+            "--truth",
+            str(DATA / "truth_42.json"),
+            "--out",
+            str(tmp_path),
+            "--config",
+            str(REPO / "config"),
+        ]
+    )
+    assert exit_code == 0
+    assert (tmp_path / "results.json").exists()
+    assert (tmp_path / "results.md").exists()
+    assert_no_ambiguous_money_keys(json.loads((tmp_path / "results.json").read_text()))

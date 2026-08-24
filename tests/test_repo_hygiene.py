@@ -296,7 +296,7 @@ def test_manifest_table_count_equals_the_files_the_generator_writes() -> None:
     is the day{N}_*.csv files on disk that the engine will read, and a manifest
     that disagrees with them is a claim nobody checked.
     """
-    data = REPO_ROOT / "data"
+    data = REPO_ROOT / "data" / "dev"
     if not data.is_dir() or not any(data.glob("day*_*.csv")):
         pytest.skip("no generated data present; run `make gen` first")
 
