@@ -35,7 +35,7 @@ from settlesense.types import (
     SettlementLineType,
 )
 
-__all__ = ["DayDataset", "IngestError", "load_dataset"]
+__all__ = ["DayDataset", "IngestError", "canonical_sort_key", "load_dataset"]
 
 
 class IngestError(ValueError):
@@ -100,7 +100,7 @@ class DayDataset:
         return sum(len(getattr(self, name)) for name in TABLE_FILES)
 
 
-def _canonical_sort_key(record: object) -> tuple[str, ...]:
+def canonical_sort_key(record: object) -> tuple[str, ...]:
     """Every field as text, in declaration order.
 
     The primary id is the first declared field of all six record types, so
@@ -112,7 +112,7 @@ def _canonical_sort_key(record: object) -> tuple[str, ...]:
 
 
 def _sorted(records: Iterable[T]) -> tuple[T, ...]:
-    return tuple(sorted(records, key=_canonical_sort_key))
+    return tuple(sorted(records, key=canonical_sort_key))
 
 
 def _read_rows(path: Path, expected: tuple[str, ...]) -> Iterator[tuple[int, Mapping[str, str]]]:

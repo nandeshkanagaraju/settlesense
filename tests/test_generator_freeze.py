@@ -194,12 +194,21 @@ def test_no_further_re_freeze_once_the_engine_exists() -> None:
 def test_the_engine_detector_is_honest() -> None:
     """Guards the guard, in both directions.
 
-    A detector stuck at False would let a third freeze through forever; one
-    stuck at True would fire on the stubs that exist today.
+    FLIPPED AT M3, deliberately and in the commit that started it, exactly as
+    the previous version of this test demanded. It used to assert the detector
+    read False while settlesense/matching/ held only stubs. M3 implemented the
+    deterministic engine, so it now reads True and THE NO-RE-FREEZE RULE IS
+    LIVE: from here a generator defect is recorded in LIMITATIONS.md and lived
+    with, because a correction can no longer be distinguished from tuning the
+    data to a measured result.
+
+    A detector stuck at False would let a third freeze through forever, which
+    is why this is asserted rather than assumed to have flipped on its own.
     """
     assert ENGINE_DIR.is_dir(), "settlesense/matching/ is missing entirely"
-    assert not _engine_is_implemented(), (
-        "the engine reads as implemented already. If M3 has genuinely started, "
-        "delete this assertion in the same commit that starts it - deliberately, "
-        "so the no-re-freeze rule becomes live rather than silently bypassed."
+    assert _engine_is_implemented(), (
+        "settlesense/matching/ reads as stubs again. M3 is committed, so either "
+        "the engine was deleted or the detector stopped recognising it - and a "
+        "detector stuck at False silently permits the re-freeze that "
+        "LIMITATIONS.md rules out."
     )
