@@ -26,6 +26,7 @@ FAULT_CATEGORIES: dict[str, str] = {
     "truth_injection": "Truth self-check       (corrupted data must not be written)",
     "noise_accounting": "Noise accounting       (the ledger must balance both ways)",
     "hygiene": "Repository hygiene     (tree and manifest invariants)",
+    "boundary_refusal": "Boundary refusals      (malformed external input must not parse)",
 }
 
 _counts: dict[str, int] = dict.fromkeys(FAULT_CATEGORIES, 0)
