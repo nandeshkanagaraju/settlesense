@@ -104,3 +104,21 @@ no_implicit_optional = true
 [[tool.mypy.overrides]]
 module = ["Levenshtein.*", "streamlit.*", "yaml.*"]
 ignore_missing_imports = true
+
+# numpy is never imported by this project. It arrives transitively (streamlit,
+# and hypothesis's numpy extra), and its stubs use `type` statements that need
+# Python 3.12+ to parse - while python_version above is deliberately pinned to
+# 3.11, the floor in requires-python, so our own code is checked against the
+# oldest interpreter we claim to support.
+#
+# follow_imports, not ignore_missing_imports: the package IS found, and the
+# failure is mypy refusing to PARSE it. Raising python_version to silence this
+# would stop checking our code against 3.11, which is the opposite trade.
+#
+# This surfaced only once the declared dependencies were actually installed -
+# before that, streamlit was absent and mypy never followed the chain. A second
+# instance of a check that was not running looking exactly like one that passes.
+[[tool.mypy.overrides]]
+module = ["numpy.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true

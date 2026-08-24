@@ -26,7 +26,7 @@ define notimpl
 	@exit 1
 endef
 
-.PHONY: help gen gen-holdout test eval eval-ai ui check golden-accept bench config-check fault-report
+.PHONY: help gen gen-holdout test eval eval-ai ui check golden-accept bench config-check fault-report collection-baseline
 
 help:
 	@echo "SettleSense targets:"
@@ -35,6 +35,7 @@ help:
 	@echo "  test          pytest: no network, deterministic, under 60s"
 	@echo "  check         ruff + mypy + determinism guard tests"
 	@echo "  fault-report  guards proven able to fail, by category"
+	@echo "  collection-baseline  re-record collected test counts (deliberately awkward)"
 	@echo "  config-check  load every config file and print the config hash"
 	@echo "  eval          held-out evaluation across all baselines"
 	@echo "  eval-ai       real model run - the experiment, not a test"
@@ -136,4 +137,43 @@ golden-accept:
 # inspecting an empty set or asserting something the code cannot violate; the
 # difference is invisible in a green run, so it is counted separately.
 fault-report:
-	$(PYTHON) -m pytest -q -m "config_refusal or charter_guard or truth_injection or noise_accounting or hygiene"
+	$(PYTHON) -m pytest -q -m "config_refusal or charter_guard or truth_injection or noise_accounting or hygiene or boundary_refusal"
+
+# The count of tests that are COLLECTED, per file and in total. A drop means
+# tests stopped being collected, which is invisible in a green run because
+# everything that remains still passes.
+#
+# Deliberately NOT reachable from test or check, for the same reason
+# golden-accept is not: a baseline that regenerates itself records whatever
+# happened rather than what should happen, and running it is the easiest way to
+# make a real regression disappear. Run it in the commit that changes the test
+# set, and say so in the message.
+collection-baseline:
+	@test "$$SETTLESENSE_ACCEPT_BASELINE" = "1" || \
+	  (echo "REFUSED. Rewriting the baseline hides tests that stopped being collected."; \
+	   echo "If the test set SHOULD have changed, say why in the commit message, then:"; \
+	   echo "  SETTLESENSE_ACCEPT_BASELINE=1 make collection-baseline"; exit 1)
+	@$(PYTHON) -m pytest tests/ --collect-only -q 2>/dev/null | grep '::' | $(PYTHON) -c "$$BASELINE_SCRIPT"
+
+define BASELINE_SCRIPT
+import collections, json, sys
+counts = collections.Counter(
+    line.split("::", 1)[0] for line in sys.stdin.read().splitlines() if "::" in line
+)
+data = {
+    "_comment": (
+        "Collected-test counts, per file and in total. A DROP means tests stopped "
+        "being COLLECTED, which is not the same as passing. "
+        "tests/test_env_integrity.py compares against this. Regenerate DELIBERATELY "
+        "with `SETTLESENSE_ACCEPT_BASELINE=1 make collection-baseline`, in the same "
+        "commit that changes the test set - never automatically, and never to make "
+        "a failure go away."
+    ),
+    "files": dict(sorted(counts.items())),
+    "total": sum(counts.values()),
+}
+with open("tests/collection_baseline.json", "w") as handle:
+    handle.write(json.dumps(data, indent=2) + "\n")
+print(f"baseline updated: {data['total']} tests across {len(counts)} files")
+endef
+export BASELINE_SCRIPT

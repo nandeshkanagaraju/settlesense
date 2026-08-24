@@ -33,6 +33,51 @@ _counts: dict[str, int] = dict.fromkeys(FAULT_CATEGORIES, 0)
 _failed: dict[str, int] = dict.fromkeys(FAULT_CATEGORIES, 0)
 
 
+# ---------------------------------------------------------------------------
+# Collection integrity (tests/test_env_integrity.py reads these)
+#
+# A test module that fails to import is reported by pytest as a collection
+# ERROR, which fails the run. A module that calls pytest.importorskip becomes a
+# SKIP, which does not. The two situations are identical in cause and opposite
+# in consequence, and the second is invisible in a summary line that says
+# "passed". So collection is recorded here rather than trusted.
+# ---------------------------------------------------------------------------
+
+COLLECTION_ERRORS: list[str] = []
+"""nodeids that failed to collect. Non-empty means a module did not import."""
+
+COLLECTED_PER_FILE: dict[str, int] = {}
+"""Test file (repo-relative) -> number of items collected from it."""
+
+
+def pytest_collectreport(report: pytest.CollectReport) -> None:
+    if report.failed:
+        COLLECTION_ERRORS.append(report.nodeid or "<unknown>")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(
+    session: pytest.Session, config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Record what was COLLECTED, before -m or -k deselection removes anything.
+
+    tryfirst is load-bearing. Deselection edits `items` in place, so a hook
+    running after it would record the filtered run instead of the collected
+    tree - and `make check` runs `-m determinism`, which deselects most of the
+    suite. The baseline comparison would then be measured against whatever
+    happened to be selected, which is the failure mode this whole file exists
+    to prevent: a check whose subject quietly shrank to nothing.
+    """
+    COLLECTED_PER_FILE.clear()
+    root = session.config.rootpath
+    for item in items:
+        try:
+            relative = str(item.path.relative_to(root))
+        except ValueError:  # pragma: no cover - an item outside the repo
+            relative = str(item.path)
+        COLLECTED_PER_FILE[relative] = COLLECTED_PER_FILE.get(relative, 0) + 1
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Iterator[None]:
     outcome = yield
