@@ -46,6 +46,7 @@ MUST_IGNORE = (".DS_Store", "__pycache__", ".pytest_cache", "*.pyc", ".venv")
 DECLARED_TREE = frozenset(
     {
         ".gitignore",
+        "EVAL_SET_MANIFEST.json",
         "GENERATOR_MANIFEST.json",
         "LIMITATIONS.md",
         "Makefile",

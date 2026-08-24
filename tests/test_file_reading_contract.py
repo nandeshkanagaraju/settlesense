@@ -44,6 +44,9 @@ REGISTERED_READERS = frozenset(
     {
         "settlesense/ingest.py",
         "settlesense/config.py",
+        "eval/run_eval.py",
+        "eval/run_eval_ai.py",
+        "settlesense/ai/client.py",
     }
 )
 """Every module allowed to read a file, each with a contract test below.
@@ -137,9 +140,90 @@ def _config_empty(tmp: Path) -> str:
     return str(caught.value)
 
 
+def _run_eval_missing(tmp: Path) -> str:
+    """An empty directory has no day*_*.csv at all."""
+    from eval.run_eval import load_days
+
+    with pytest.raises(SystemExit) as caught:
+        load_days(tmp, load_config(CONFIG))
+    return str(caught.value)
+
+
+def _run_eval_empty(tmp: Path) -> str:
+    """A day file that EXISTS with only a header. Legitimate: day 1 has no
+    bank credits because settlement is T+N."""
+    from eval.run_eval import load_days
+
+    for name, header in (
+        ("day1_ledger.csv", "order_id,invoice_no,gross,order_date,customer_id,sku"),
+        ("day1_payments.csv", "payment_id,order_id,method,authorized,captured,status,captured_at"),
+        ("day1_refunds.csv", "refund_id,payment_id,amount,created_at"),
+        (
+            "day1_settlements.csv",
+            "settlement_id,batch_id,line_type,payment_id,refund_id,gross,fee,tax,net,"
+            "settled_event_date",
+        ),
+        ("day1_batches.csv", "batch_id,utr,net_total,settled_event_date"),
+        ("day1_bank.csv", "bank_txn_id,value_date,amount,narration,direction"),
+    ):
+        (tmp / name).write_text(header + "\n", encoding="utf-8")
+    dataset = load_days(tmp, load_config(CONFIG))
+    assert dataset.row_count() == 0
+    return "loaded, zero rows"
+
+
+def _run_eval_ai_missing(tmp: Path) -> str:
+    """No seed_* directories: the evaluation set was never generated."""
+    from eval.run_eval_ai import main
+
+    with pytest.raises(SystemExit) as caught:
+        main(["--eval-dir", str(tmp), "--out", str(tmp / "out")])
+    return str(caught.value)
+
+
+def _run_eval_ai_empty(tmp: Path) -> str:
+    """A seed_* directory that EXISTS but holds no day files.
+
+    Distinguishable from absent: the runner gets past the "was it generated"
+    check and fails on the empty directory instead, with a different message.
+    """
+    from eval.run_eval_ai import main
+
+    (tmp / "seed_1000").mkdir(parents=True, exist_ok=True)
+    with pytest.raises(SystemExit) as caught:
+        main(["--eval-dir", str(tmp), "--out", str(tmp / "out")])
+    return str(caught.value)
+
+
+def _replay_missing(tmp: Path) -> str:
+    """No fixture recorded for this prompt."""
+    from settlesense.ai.client import ReplayLLMClient, ReplayMissError
+
+    with pytest.raises(ReplayMissError) as caught:
+        ReplayLLMClient(fixture_dir=tmp / "absent").complete("unrecorded")
+    return str(caught.value)
+
+
+def _replay_empty(tmp: Path) -> str:
+    """A fixture file that EXISTS but is empty. NOT the same as absent: an
+    empty recording is a corrupt one, and reporting it as a miss would send
+    someone to re-record a prompt that was already recorded."""
+    import json
+
+    from settlesense.ai.client import ReplayLLMClient, prompt_hash
+
+    (tmp / f"{prompt_hash('unrecorded')}.json").write_text("", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError) as caught:
+        ReplayLLMClient(fixture_dir=tmp).complete("unrecorded")
+    return f"corrupt fixture: {caught.value}"
+
+
 CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "settlesense/ingest.py": (_ingest_missing, lambda _tmp: _ingest_empty()),
     "settlesense/config.py": (_config_missing, _config_empty),
+    "eval/run_eval.py": (_run_eval_missing, _run_eval_empty),
+    "eval/run_eval_ai.py": (_run_eval_ai_missing, _run_eval_ai_empty),
+    "settlesense/ai/client.py": (_replay_missing, _replay_empty),
 }
 
 

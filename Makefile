@@ -26,7 +26,7 @@ define notimpl
 	@exit 1
 endef
 
-.PHONY: help gen gen-holdout eval-set test eval eval-ai ui check golden-accept bench config-check fault-report collection-baseline
+.PHONY: help gen gen-holdout eval-set test eval eval-ai ui check golden-accept bench config-check fault-report collection-baseline eval-holdout
 
 help:
 	@echo "SettleSense targets:"
@@ -38,7 +38,8 @@ help:
 	@echo "  fault-report  guards proven able to fail, by category"
 	@echo "  collection-baseline  re-record collected test counts (deliberately awkward)"
 	@echo "  config-check  load every config file and print the config hash"
-	@echo "  eval          held-out evaluation across all baselines"
+	@echo "  eval          evaluation on the DEV set (seed 42)"
+	@echo "  eval-holdout  the HELD-OUT set (seed 999) - run ONCE, at the end"
 	@echo "  eval-ai       real model run - the experiment, not a test"
 	@echo "  bench         throughput scaling table"
 	@echo "  ui            evidence queue"
@@ -114,17 +115,42 @@ config-check:
 
 # --- evaluation -------------------------------------------------------------
 
-# Explicit contract - these exact paths are repeated in the README.
+# `eval` RUNS THE DEV SET. This is the most important line in the Makefile.
+#
+# If the default target pointed at the holdout it would be run dozens of times
+# during development and would stop being held out - not through any single bad
+# decision, just through convenience. The holdout has its own target below,
+# which refuses to be quiet about what it is.
 eval:
-	$(call notimpl,eval,Gate 4 / M5,eval/run_eval.py)
+	$(PYTHON) -m eval.run_eval \
+	  --data data \
+	  --truth data/truth_42.json \
+	  --baselines all \
+	  --out reports/eval
+
+# THE HELD-OUT SET. Seed 999, plus the two withheld noise types. Run ONCE, at
+# the end. Every run after the first is a run against data you have now seen.
+eval-holdout:
+	@echo "=============================================================="
+	@echo "  This is the HELD-OUT set (seed 999)."
+	@echo "  Record whatever it prints."
+	@echo ""
+	@echo "  Every run after the first is a run against data you have"
+	@echo "  now seen. There is no way to un-see it and no way to tell"
+	@echo "  from the output how many times this has been run."
+	@echo "=============================================================="
+	@echo ""
 	$(PYTHON) -m eval.run_eval \
 	  --data data/holdout \
 	  --truth data/holdout/truth_999.json \
 	  --baselines all \
-	  --out reports/eval
+	  --out reports/eval-holdout
 
+# The 20-seed AI evaluation set (seeds 1000-1019), declared in README before
+# generation. Runs the engine over all twenty and reports the residual surface
+# M7 has to work with.
 eval-ai:
-	$(call notimpl,eval-ai,Gate 6 / M7,settlesense/ai/)
+	$(PYTHON) -m eval.run_eval_ai --eval-dir data/eval --out reports/eval-ai
 
 bench:
 	$(call notimpl,bench,Gate 4 / M5a,eval/bench.py)
