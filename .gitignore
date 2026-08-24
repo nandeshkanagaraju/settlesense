@@ -6,3 +6,8 @@ __pycache__/
 .pytest_cache/
 *.pdf
 .DS_Store
+
+# Generated evaluation datasets: ~300MB, regenerable byte-identically from
+# (frozen generator commit, seed). EVAL_SET_MANIFEST.json records a content
+# hash per seed, which is a checkable claim rather than 2,880 unread files.
+data/eval/

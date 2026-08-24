@@ -44,6 +44,30 @@ holiday correctly, not whether it knows India's actual holiday list. Inventing a
 real-looking holiday list would be a false claim of accuracy. Swapping in real
 dates is a config change requiring no code change.
 
+## Fuzzy UTR Path B is conditioned on low batch density
+
+Path B — the scoring path used when no UTR fragment survives in the narration
+— accepted **6 of 8** candidates on seed 42 with **zero false accepts**.
+
+That result is conditioned on **low batch density**: 39 batches across 3
+merchants over ~90 days, where amount-plus-date is close to unique. It should
+not be read as a general precision figure for amount-and-date matching.
+
+A production merchant settling daily with recurring price points would
+generate frequent same-amount collisions, and Path B's precision would
+degrade — possibly sharply, because its entire discriminating power is those
+two fields. The **abstention rule is the safeguard**: when two batches share
+an amount inside the date window, Path B refuses rather than picking. It fired
+correctly on the one same-amount case constructed for it
+(`test_two_batches_same_amount_same_window_no_fragment_abstains`).
+
+Note what that sentence admits. The collision case had to be **constructed**,
+because no two batches in the seed-42 dataset share an amount at all — the
+safeguard is tested, but it has never fired on real generated data. Whether it
+fires at the right rate under realistic density is not established here.
+Seeds 1000–1019 are checked for naturally occurring collisions; whatever they
+show is recorded rather than assumed.
+
 ## Baselines
 
 ## Thresholds

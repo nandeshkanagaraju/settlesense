@@ -47,6 +47,45 @@ Recorded here at submission: which Level 2 modules were built and which were
 cut, without apology. Cutting a conditional module is a planned outcome, not
 an incomplete submission.
 
+## The AI evaluation set — declared before it was run
+
+**Seeds 1000–1019 inclusive. All twenty. No seed will be excluded for any
+reason discovered after generation.**
+
+This section was written and committed BEFORE the twenty datasets were
+generated, and before any result from them was seen. That ordering is the
+whole point: a range chosen after inspecting per-seed outcomes is not an
+evaluation set, it is a selection, and no amount of care afterwards can undo
+the choice. Committing the declaration first is what makes the claim
+checkable — `git log` shows this text predating the numbers.
+
+| Seed range | Role | Used for |
+|---|---|---|
+| 42 | dev | Building M2–M4. Inspected freely, results not reportable. |
+| 999 | holdout | Includes the two withheld noise types. Untouched until M5. |
+| **1000–1019** | **AI evaluation** | **M7 onward. The measurement surface.** |
+
+**Why twenty and why these.** The deterministic layer leaves one kind of work:
+ambiguous duplicate pairs, ~26 per seed on the dev set. Twenty seeds gives
+roughly 520 independent decisions — enough that a per-category accuracy figure
+is not dominated by a handful of cases, and small enough to run inside a test
+budget. The specific numbers 1000–1019 carry no meaning beyond being the next
+round block after the dev and holdout seeds; they were fixed by writing them
+here, not by trying alternatives.
+
+**Pre-declared expectation.** Roughly 26 `DUPLICATE_CANDIDATE` pairs per seed,
+so roughly 520 decisions in total. A seed producing a wildly different count
+signals a noise rate interacting with something seed-dependent, and is a
+finding to investigate — **not** grounds to drop the seed. If any seed is ever
+excluded, the exclusion and its reason are recorded here in the same commit
+that excludes it.
+
+**Storage.** The twenty datasets are ~300MB and are NOT committed. They are
+defined by (frozen generator commit, seed) and regenerate byte-identically;
+`EVAL_SET_MANIFEST.json` records a content hash per seed, which is a
+checkable claim rather than 2,880 files nobody will read. Regenerate with
+`make eval-set`.
+
 ## Limitations
 
 See [LIMITATIONS.md](LIMITATIONS.md).
