@@ -321,9 +321,14 @@ def resolve(
 
     ranked = tuple(sorted(scores, key=lambda candidate: candidate.sort_key()))
     if not ranked:
+        # AMBIGUOUS, not ABSTAINED. Both route to the residual set, so the
+        # difference is what the verdict TELLS a reader. ABSTAINED is reserved
+        # for "two candidates I cannot separate" - a refusal to choose. With
+        # zero candidates there was nothing to refuse, and labelling it a
+        # refusal would imply the engine looked at alternatives and declined.
         return FuzzyVerdict(
             bank_txn_id=bank_row.bank_txn_id,
-            outcome=FuzzyOutcome.ABSTAINED,
+            outcome=FuzzyOutcome.AMBIGUOUS,
             path=path,
             matched_batch_id=None,
             best_score=None,

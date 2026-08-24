@@ -318,9 +318,12 @@ def test_every_verdict_records_which_path_scored_it(config: AppConfig) -> None:
         assert all(c.path is verdict.path for c in verdict.candidates)
 
 
-def test_no_candidates_abstains(config: AppConfig) -> None:
+def test_no_candidates_is_ambiguous_not_a_refusal(config: AppConfig) -> None:
+    """ABSTAINED is reserved for "two candidates I cannot separate". With zero
+    candidates there was nothing to refuse. Both route to the residual set;
+    the difference is what the verdict tells a reader."""
     verdict = resolve(_credit("NEFT X", "1.00"), [], {}, config)
-    assert verdict.outcome is FuzzyOutcome.ABSTAINED
+    assert verdict.outcome is FuzzyOutcome.AMBIGUOUS
     assert verdict.candidates == ()
 
 

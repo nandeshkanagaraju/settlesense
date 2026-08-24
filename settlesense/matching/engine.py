@@ -474,6 +474,27 @@ def _batch_profiles(dataset: DayDataset, config: AppConfig) -> dict[str, str]:
     return profiles
 
 
+def _p9_rounding_category(batch_total: Money, linked_amount: Money, tolerance: Money) -> str | None:
+    """P9, at batch grain. Runs LAST, over links produced by P2b and by P8.
+
+    "Residual <= tolerance after all above" (SDD 4.2). It categorises a
+    difference on a batch that is already linked; it never creates a link. That
+    is what makes it the final pass rather than a competitor to P8 - by the
+    time it runs, the question of WHICH credit belongs to this batch has been
+    settled by an earlier rule.
+
+    A residual larger than the tolerance is deliberately NOT categorised here.
+    It is not a rounding difference, and naming it one would explain away a
+    real shortfall with a label that means "too small to matter".
+    """
+    difference = money(batch_total - linked_amount)
+    if difference == ZERO:
+        return None
+    if abs(difference) <= tolerance:
+        return str(VarianceCategory.ROUNDING_DIFFERENCE)
+    return str(VarianceCategory.UNEXPLAINED)
+
+
 def _classify_batches(
     dataset: DayDataset,
     config: AppConfig,
@@ -481,7 +502,7 @@ def _classify_batches(
     rounding_tolerance: Money,
     as_of: date,
 ) -> tuple[tuple[BatchLinkOutcome, ...], tuple[str, ...], tuple[FuzzyVerdict, ...]]:
-    """Batch grain, in pass order: P2 exact, P9 rounding, P8 fuzzy, then classify.
+    """Batch grain in strict pass order: P2, P2b, P8, then P9 categorisation.
 
     P8 IS A PHASE OVER CREDITS, not a step inside the per-batch loop. `resolve`
     scores one bank credit against many candidate batches, which is the right
@@ -489,11 +510,14 @@ def _classify_batches(
     credit", not "which credit is this batch". Running it per batch would let
     two batches each claim the same credit before anything noticed.
 
-    Ordering note: P9's rounding fallback runs before P8 even though SDD 4.2
-    numbers them the other way. P9-at-batch-grain here is an EXACT-UTR rule
-    that tolerates a sub-rupee amount difference, so it is stricter than P8,
-    and running the stricter rule first is what the strict-order discipline
-    asks for. The looser rule never claims a row the stricter one could take.
+    P2b IS NOT P9, and an earlier version of this docstring said it was. The
+    rule that runs before P8 requires the batch's FULL UTR in the narration and
+    merely tolerates a sub-rupee amount difference - that is the exact-match
+    family, a stricter P2, and running it before the fuzzy pass is the strict
+    ordering working. P9 is "residual <= tolerance after all above": a
+    CATEGORISATION of a difference on an already-linked batch, and it runs last
+    over links from both P2b and P8. Calling P2b "P9" made the pass order look
+    inverted when it was not.
     """
     profiles = _batch_profiles(dataset, config)
     due_dates = {
@@ -516,7 +540,7 @@ def _classify_batches(
     outcomes: dict[str, BatchLinkOutcome] = {}
     still_open: list[str] = []
 
-    # --- P2 result, plus P9 rounding at batch grain -------------------------
+    # --- P2 exact, then P2b: full UTR present, amount within tolerance ------
     for link in sorted(links, key=lambda link: link.batch_id):
         batch = batches[link.batch_id]
         if link.is_linked:
@@ -553,7 +577,7 @@ def _classify_batches(
                 batch_net_total=batch.net_total,
                 linked_amount=row.amount,
                 variance=money(batch.net_total - row.amount),
-                category=str(VarianceCategory.ROUNDING_DIFFERENCE),
+                category=_p9_rounding_category(batch.net_total, row.amount, rounding_tolerance),
                 resolved_by=ResolutionSource.DETERMINISTIC,
                 confidence=None,
             )
