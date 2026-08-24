@@ -28,6 +28,29 @@ fuzzy_utr:
   accept_score: "0.85"
   min_separation: "0.15"
 
+  # --- PATH B: no UTR fragment survives in the narration ---------------------
+  # score = weight_amount_no_utr * amount_agrees + weight_date_no_utr * date_proximity
+  #
+  # A SEPARATE FORMULA WITH ITS OWN WEIGHTS, not Path A with the prefix and
+  # edit terms zeroed. Zeroing them caps every no-UTR batch at 0.20 - below
+  # any threshold - so the outcome would be an artifact of a weight rather
+  # than a decision, and 8 of the 15 unlinked batches here have no fragment.
+  weight_amount_no_utr: "0.60"
+  weight_date_no_utr: "0.40"
+  # STRICTLY higher than accept_score. Amount plus date is weaker evidence
+  # than a matching UTR prefix, so it must clear a higher bar to be believed.
+  # The loader RAISES if this is not strictly greater.
+  accept_score_no_utr: "0.90"
+  # Working days either side of the computed T+N due date that a credit may
+  # land and still be considered. Beyond it the score is a hard zero, not a
+  # small number - a credit two weeks late is not weak evidence, it is other
+  # evidence.
+  date_window_days: 3
+  # Shortest run of leading characters shared with a candidate UTR that counts
+  # as a surviving fragment, and therefore selects Path A. Matches the
+  # generator's truncation floor and normalize.UTR_CANDIDATE_MIN_LEN.
+  fragment_min_chars: 6
+
 # --- Arithmetic tolerance (SDD 4.2 P9) -------------------------------------
 tolerance:
   # P9 rounding: a residual at or below this, after every other component,

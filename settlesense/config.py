@@ -499,6 +499,12 @@ class FuzzyUtrThresholds:
     score_quantum: Decimal
     accept_score: Decimal
     min_separation: Decimal
+    # Path B - no UTR fragment. Its own weights and its own, higher, threshold.
+    weight_amount_no_utr: Decimal
+    weight_date_no_utr: Decimal
+    accept_score_no_utr: Decimal
+    date_window_days: int
+    fragment_min_chars: int
 
 
 @dataclass(frozen=True)
@@ -597,6 +603,11 @@ def load_thresholds(path: Path) -> ThresholdsConfig:
                 "score_quantum",
                 "accept_score",
                 "min_separation",
+                "weight_amount_no_utr",
+                "weight_date_no_utr",
+                "accept_score_no_utr",
+                "date_window_days",
+                "fragment_min_chars",
             }
         ),
         fuzzy_path,
@@ -608,6 +619,11 @@ def load_thresholds(path: Path) -> ThresholdsConfig:
         score_quantum=_decimal(fuzzy_node, "score_quantum", fuzzy_path),
         accept_score=_decimal(fuzzy_node, "accept_score", fuzzy_path),
         min_separation=_decimal(fuzzy_node, "min_separation", fuzzy_path),
+        weight_amount_no_utr=_decimal(fuzzy_node, "weight_amount_no_utr", fuzzy_path),
+        weight_date_no_utr=_decimal(fuzzy_node, "weight_date_no_utr", fuzzy_path),
+        accept_score_no_utr=_decimal(fuzzy_node, "accept_score_no_utr", fuzzy_path),
+        date_window_days=_int(fuzzy_node, "date_window_days", fuzzy_path),
+        fragment_min_chars=_int(fuzzy_node, "fragment_min_chars", fuzzy_path),
     )
     _assert_sums_to_one(
         {
@@ -617,6 +633,26 @@ def load_thresholds(path: Path) -> ThresholdsConfig:
         },
         fuzzy_path,
     )
+    _assert_sums_to_one(
+        {
+            "weight_amount_no_utr": fuzzy.weight_amount_no_utr,
+            "weight_date_no_utr": fuzzy.weight_date_no_utr,
+        },
+        f"{fuzzy_path} (path B)",
+    )
+    # STRICTLY greater, not >=. Equal thresholds would mean amount-plus-date is
+    # believed as readily as a matching UTR prefix, which is the whole reason
+    # Path B is a separate formula rather than a degraded Path A.
+    if fuzzy.accept_score_no_utr <= fuzzy.accept_score:
+        raise _fail(
+            fuzzy_path,
+            f"accept_score_no_utr ({fuzzy.accept_score_no_utr}) must be STRICTLY "
+            f"greater than accept_score ({fuzzy.accept_score}). Path B scores on "
+            "amount and date alone, which is weaker evidence than a surviving UTR "
+            "prefix, so it must clear a higher bar.",
+        )
+    _assert_positive(fuzzy.date_window_days, f"{fuzzy_path}.date_window_days")
+    _assert_positive(fuzzy.fragment_min_chars, f"{fuzzy_path}.fragment_min_chars")
     _assert_unit_interval(fuzzy.accept_score, f"{fuzzy_path}.accept_score")
     _assert_unit_interval(fuzzy.min_separation, f"{fuzzy_path}.min_separation")
     _assert_positive(fuzzy.score_quantum, f"{fuzzy_path}.score_quantum")

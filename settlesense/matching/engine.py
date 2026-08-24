@@ -51,6 +51,8 @@ from settlesense.matching.exact import (
     link_batches_to_bank,
     link_payments_to_settlements,
 )
+from settlesense.matching.fuzzy_utr import FuzzyVerdict
+from settlesense.matching.fuzzy_utr import resolve as fuzzy_resolve
 from settlesense.matching.timing import (
     WorkingDayCalendar,
     bank_value_due_date,
@@ -73,7 +75,15 @@ from settlesense.types import (
     money,
 )
 
-__all__ = ["EngineError", "build_cases", "merge_days", "run", "run_with_telemetry"]
+__all__ = [
+    "EngineError",
+    "build_cases",
+    "fuzzy_verdicts_for",
+    "merge_days",
+    "residual_cases",
+    "run",
+    "run_with_telemetry",
+]
 
 ZERO: Money = money(0)
 
@@ -470,8 +480,21 @@ def _classify_batches(
     calendar: WorkingDayCalendar,
     rounding_tolerance: Money,
     as_of: date,
-) -> tuple[tuple[BatchLinkOutcome, ...], tuple[str, ...]]:
-    """P2 then P9 at batch grain. Returns (outcomes, unclaimed bank txn ids)."""
+) -> tuple[tuple[BatchLinkOutcome, ...], tuple[str, ...], tuple[FuzzyVerdict, ...]]:
+    """Batch grain, in pass order: P2 exact, P9 rounding, P8 fuzzy, then classify.
+
+    P8 IS A PHASE OVER CREDITS, not a step inside the per-batch loop. `resolve`
+    scores one bank credit against many candidate batches, which is the right
+    direction: the question a damaged narration poses is "which batch is this
+    credit", not "which credit is this batch". Running it per batch would let
+    two batches each claim the same credit before anything noticed.
+
+    Ordering note: P9's rounding fallback runs before P8 even though SDD 4.2
+    numbers them the other way. P9-at-batch-grain here is an EXACT-UTR rule
+    that tolerates a sub-rupee amount difference, so it is stricter than P8,
+    and running the stricter rule first is what the strict-order discipline
+    asks for. The looser rule never claims a row the stricter one could take.
+    """
     profiles = _batch_profiles(dataset, config)
     due_dates = {
         batch.batch_id: bank_value_due_date(
@@ -489,31 +512,27 @@ def _classify_batches(
         as_of,
     )
     remaining = {row.bank_txn_id: row for row in unclaimed}
-    outcomes: list[BatchLinkOutcome] = []
     batches = {batch.batch_id: batch for batch in dataset.settlement_batches}
+    outcomes: dict[str, BatchLinkOutcome] = {}
+    still_open: list[str] = []
 
+    # --- P2 result, plus P9 rounding at batch grain -------------------------
     for link in sorted(links, key=lambda link: link.batch_id):
         batch = batches[link.batch_id]
         if link.is_linked:
-            outcomes.append(
-                BatchLinkOutcome(
-                    batch_id=link.batch_id,
-                    status=ExceptionStatus.CONFIRMED,
-                    bank_row_id=link.bank_txn_id,
-                    batch_net_total=link.batch_net_total,
-                    linked_amount=link.linked_amount,
-                    variance=ZERO,
-                    category=None,
-                    resolved_by=ResolutionSource.DETERMINISTIC,
-                    confidence=None,
-                )
+            outcomes[link.batch_id] = BatchLinkOutcome(
+                batch_id=link.batch_id,
+                status=ExceptionStatus.CONFIRMED,
+                bank_row_id=link.bank_txn_id,
+                batch_net_total=link.batch_net_total,
+                linked_amount=link.linked_amount,
+                variance=ZERO,
+                category=None,
+                resolved_by=ResolutionSource.DETERMINISTIC,
+                confidence=None,
             )
             continue
 
-        # P9 at batch grain: the UTR is intact and the amount is off by no more
-        # than the tolerance. The rounding_residual injector produces exactly
-        # this, and requiring an exact amount in P2 would leave it unlinked and
-        # indistinguishable from a credit that never came.
         target = normalize_utr(batch.utr)
         near = sorted(
             (
@@ -527,51 +546,86 @@ def _classify_batches(
         if near:
             row = near[0]
             del remaining[row.bank_txn_id]
-            outcomes.append(
-                BatchLinkOutcome(
-                    batch_id=link.batch_id,
-                    status=ExceptionStatus.CONFIRMED,
-                    bank_row_id=row.bank_txn_id,
-                    batch_net_total=batch.net_total,
-                    linked_amount=row.amount,
-                    variance=money(batch.net_total - row.amount),
-                    category=str(VarianceCategory.ROUNDING_DIFFERENCE),
-                    resolved_by=ResolutionSource.DETERMINISTIC,
-                    confidence=None,
-                )
+            outcomes[link.batch_id] = BatchLinkOutcome(
+                batch_id=link.batch_id,
+                status=ExceptionStatus.CONFIRMED,
+                bank_row_id=row.bank_txn_id,
+                batch_net_total=batch.net_total,
+                linked_amount=row.amount,
+                variance=money(batch.net_total - row.amount),
+                category=str(VarianceCategory.ROUNDING_DIFFERENCE),
+                resolved_by=ResolutionSource.DETERMINISTIC,
+                confidence=None,
             )
             continue
 
-        # Unlinked. Say WHY, from evidence rather than by guessing: a damaged
-        # UTR may still be recoverable by M4, a credit that never arrived
-        # cannot be. Reporting both as "unlinked" would merge a fuzzy-matching
-        # problem with a missing-money problem.
-        # NOT YET DUE is not the same as MISSING. as_of is the engine's notion
-        # of today (D2), and a batch whose credit is not due until after it has
-        # nothing wrong with it - reporting that as a missing credit would
-        # manufacture an exception out of a payout that is simply in the future.
-        # This is what makes as_of load-bearing rather than merely accepted.
-        if due_dates.get(batch.batch_id, batch.settled_event_date) > as_of:
-            outcomes.append(
-                BatchLinkOutcome(
-                    batch_id=link.batch_id,
-                    status=ExceptionStatus.PENDING_EVIDENCE,
-                    bank_row_id=None,
-                    batch_net_total=batch.net_total,
-                    linked_amount=None,
-                    variance=None,
-                    category=None,  # nothing is wrong yet; the file has not arrived
-                    resolved_by=None,
-                    confidence=None,
-                )
+        if due_dates.get(link.batch_id, batch.settled_event_date) > as_of:
+            outcomes[link.batch_id] = BatchLinkOutcome(
+                batch_id=link.batch_id,
+                status=ExceptionStatus.PENDING_EVIDENCE,
+                bank_row_id=None,
+                batch_net_total=batch.net_total,
+                linked_amount=None,
+                variance=None,
+                category=None,  # nothing is wrong yet; the file has not arrived
+                resolved_by=None,
+                confidence=None,
             )
             continue
+        still_open.append(link.batch_id)
 
-        prefix_seen = any(_shares_utr_prefix(target, row.narration) for row in remaining.values())
-        # WITHIN TOLERANCE, not exact. A credit can lose a UTR *and* carry a
-        # sub-rupee rounding residual - one batch here does both. Testing exact
-        # equality made its credit invisible, so a damaged-UTR link was reported
-        # as money that never arrived: a recoverable problem filed as a loss.
+    # --- P8 FUZZY UTR (M4) --------------------------------------------------
+    # Every surviving credit is scored against every still-open batch, so a
+    # credit is never resolved against a batch that an exact rule already
+    # claimed. Credits are processed in sorted order and a claimed batch
+    # leaves the candidate pool, so the result cannot depend on dict order.
+    verdicts: list[FuzzyVerdict] = []
+    open_batches = {batch_id: batches[batch_id] for batch_id in still_open}
+    for txn_id in sorted(remaining):
+        if not open_batches:
+            break
+        verdict = fuzzy_resolve(
+            remaining[txn_id],
+            sorted(open_batches.values(), key=lambda b: b.batch_id),
+            due_dates,
+            config,
+        )
+        verdicts.append(verdict)
+        if not verdict.is_accepted or verdict.matched_batch_id is None:
+            continue
+        batch = open_batches.pop(verdict.matched_batch_id)
+        row = remaining.pop(txn_id)
+        outcomes[batch.batch_id] = BatchLinkOutcome(
+            batch_id=batch.batch_id,
+            status=ExceptionStatus.CONFIRMED,
+            bank_row_id=row.bank_txn_id,
+            batch_net_total=batch.net_total,
+            linked_amount=row.amount,
+            variance=money(batch.net_total - row.amount),
+            category=(
+                str(VarianceCategory.ROUNDING_DIFFERENCE) if row.amount != batch.net_total else None
+            ),
+            resolved_by=ResolutionSource.DETERMINISTIC,
+            confidence=None,
+        )
+
+    # --- Whatever P8 could not resolve --------------------------------------
+    # The category comes from the FUZZY VERDICT where one exists, because the
+    # verdict knows which path scored it. Path A failing means a UTR was there
+    # and could not be mapped; Path B failing means there was none to map.
+    for batch_id in sorted(open_batches):
+        batch = open_batches[batch_id]
+        # CLASSIFIED ON EVIDENCE, not on which path happened to score it.
+        # A first version took the category straight from the fuzzy verdict,
+        # which reports UTR_MISSING_MAPPING for any Path B failure - so the two
+        # batches whose credit never arrived at all were filed as UTR-mapping
+        # problems. "We cannot find which credit this is" and "there is no
+        # credit" are different findings with different fixes, and only the
+        # evidence separates them.
+        prefix_seen = any(
+            _shares_utr_prefix(normalize_utr(batch.utr), row.narration)
+            for row in remaining.values()
+        )
         amount_seen = any(
             abs(row.amount - batch.net_total) <= rounding_tolerance for row in remaining.values()
         )
@@ -581,26 +635,18 @@ def _classify_batches(
             category = VarianceCategory.UTR_MISSING_MAPPING
         else:
             category = VarianceCategory.MISSING_VS_LATE_CREDIT
-        outcomes.append(
-            BatchLinkOutcome(
-                batch_id=link.batch_id,
-                status=ExceptionStatus.OPEN,
-                bank_row_id=None,
-                batch_net_total=batch.net_total,
-                linked_amount=None,
-                variance=None,
-                category=str(category),
-                resolved_by=None,
-                confidence=None,
-            )
+        outcomes[batch_id] = BatchLinkOutcome(
+            batch_id=batch_id,
+            status=ExceptionStatus.OPEN,
+            bank_row_id=None,
+            batch_net_total=batch.net_total,
+            linked_amount=None,
+            variance=None,
+            category=str(category),
+            resolved_by=None,
+            confidence=None,
         )
-    # A credit left over because ITS OWN batch could not be linked exactly is
-    # not an orphan - it is the far side of an unlinked batch, and M4 may yet
-    # join them. A true orphan is money in the account that no batch can claim
-    # at all: no UTR prefix in the narration, no batch total within tolerance.
-    #
-    # Measured: without this distinction 15 credits were reported as
-    # UNEXPLAINED against a true 2. Thirteen of them had a batch waiting.
+
     orphans = tuple(
         sorted(
             txn_id
@@ -613,7 +659,8 @@ def _classify_batches(
             )
         )
     )
-    return tuple(outcomes), orphans
+    ordered = tuple(outcomes[batch_id] for batch_id in sorted(outcomes))
+    return ordered, orphans, tuple(verdicts)
 
 
 _UTR_PREFIX_FLOOR = 6
@@ -674,7 +721,9 @@ def run_with_telemetry(
     )
 
     # --- Population B -------------------------------------------------------
-    batch_links, orphan_bank_ids = _classify_batches(dataset, config, calendar, tolerance, as_of)
+    batch_links, orphan_bank_ids, _verdicts = _classify_batches(
+        dataset, config, calendar, tolerance, as_of
+    )
 
     # --- Population C part 2: orphan credits --------------------------------
     bank_by_id = {row.bank_txn_id: row for row in dataset.bank_rows}
@@ -711,6 +760,23 @@ def run_with_telemetry(
         config_hash=config.config_hash,
     )
     return result, RunTelemetry()
+
+
+def fuzzy_verdicts_for(
+    dataset: DayDataset, config: AppConfig, as_of: date
+) -> tuple[FuzzyVerdict, ...]:
+    """Every P8 verdict from a run, for reporting and tests.
+
+    Deliberately NOT a field on ReconciliationResult. A verdict carries scores
+    and candidate lists that are diagnostics about how a link was reached, not
+    part of the reconciliation itself, and SDD 8.1 keeps the business result to
+    what is hashed and goldened.
+    """
+    calendar = WorkingDayCalendar(config.calendar)
+    _links, _orphans, verdicts = _classify_batches(
+        dataset, config, calendar, config.thresholds.tolerance.rounding_rupees, as_of
+    )
+    return verdicts
 
 
 def residual_cases(result: ReconciliationResult) -> tuple[CaseOutcome, ...]:
