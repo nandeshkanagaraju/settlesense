@@ -1,15 +1,8 @@
 """M2 - Reading a day's CSV files into typed, normalized records.
 
-WHY THIS IS NOT IN normalize.py. The M2 brief asks for normalize.py to hold
-"pure functions only, no I/O" and, in the same breath, for a load_dataset that
-reads CSVs. Those cannot both live in one module. Splitting them keeps the
-purity guard real: `test_normalize_is_pure` AST-scans normalize.py for file
-access and would have to be softened into an allow-list of one the moment a
-reader moved in, and an allow-list of one is how an allow-list of five begins.
-
-SDD 2 does not list this module. Recorded as a deliberate deviation rather
-than a quiet addition: the alternative is a normalize.py that opens files,
-which contradicts SDD 4.1's own "every normalization is a pure function".
+ALL file I/O lives here (SDD 2). normalize.py is pure and stays that way:
+`test_normalize_is_pure` AST-scans it for file access, and that guard only
+works while there is nothing in it to excuse.
 
 This module is where DATASET invariants are enforced - that every date falls
 inside the configured simulation window (D13), that a REFUND line carries a

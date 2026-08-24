@@ -30,6 +30,7 @@ from typing import Any, Final
 
 __all__ = [
     "CENTS",
+    "AuditActor",
     "AuditEntry",
     "BankRow",
     "BatchLinkOutcome",
@@ -239,11 +240,32 @@ class ExceptionStatus(StrEnum):
 
 
 class ResolutionSource(StrEnum):
-    """Who resolved an exception. SDD 3.1 CaseOutcome.resolved_by."""
+    """Who RESOLVED an exception. SDD 3.1 CaseOutcome.resolved_by.
+
+    Three members, not four. The exporter acts on an exception but never
+    resolves one - it emits the accounting entry for a decision already made -
+    so it belongs in AuditActor and not here. Keeping one vocabulary for both
+    would let `resolved_by = EXPORTER` typecheck, which would read as "the
+    exporter explained this variance".
+    """
 
     DETERMINISTIC = "DETERMINISTIC"
     AI_VERIFIED = "AI_VERIFIED"
     HUMAN = "HUMAN"
+
+
+class AuditActor(StrEnum):
+    """Who performed an audited action. SDD 3 AuditEntry.actor - FOUR members.
+
+    A superset of ResolutionSource by exactly one: EXPORTER. SDD 3 names the
+    exporter as the sole writer of CLOSED, so it must be able to appear in the
+    audit trail while remaining ineligible as a resolver.
+    """
+
+    DETERMINISTIC = "DETERMINISTIC"
+    AI_VERIFIED = "AI_VERIFIED"
+    HUMAN = "HUMAN"
+    EXPORTER = "EXPORTER"
 
 
 # ---------------------------------------------------------------------------
@@ -390,24 +412,31 @@ class CaseOutcome(_Record):
 
 @dataclass(frozen=True)
 class BatchLinkOutcome(_Record):
-    """Population B. One batch's link to a bank credit.
+    """Population B. One per settlement batch. Batch-count denominator.
 
-    SPEC GAP, FLAGGED NOT INVENTED QUIETLY: SDD 8.1 declares
-    `batch_links: tuple[BatchLinkOutcome, ...]` but never defines the type.
-    The fields below are the Population B analogue of CaseOutcome, carrying
-    exactly what SDD 3.1 says Population B reports - a link rate and a
-    false-link rate - plus `net_total` because 3.1 requires Population B money
-    metrics to use batch.net_total and to be labelled distinctly from
-    Population A's expected_gross basis.
+    Field names follow SDD 8.1. `batch_net_total` and `linked_amount` are
+    deliberately not one name: the first is the link's money BASIS and exists
+    whether or not a credit arrived, the second is what actually landed and is
+    None when nothing did.
+
+    ONE ADDITION TO THE SPEC'S FIELD LIST, made openly. `category` is not in
+    SDD 8.1's definition, and it is required for Population B to be scoreable
+    at all: gen/truth.py records `TruthBatchLink.true_category`, and the
+    taxonomy carries UTR_TRUNCATED_MAPPING, UTR_MISSING_MAPPING and
+    MISSING_VS_LATE_CREDIT, every one of which is a batch-link category rather
+    than a case category. Without this field a link that failed because the
+    UTR was truncated is indistinguishable from one that failed because the
+    credit never arrived, and the eval has nothing to compare true_category
+    against.
     """
 
     batch_id: str
     status: ExceptionStatus
-    bank_row_id: str | None  # None when no credit was linked
-    net_total: Money  # Population B money basis. NOT expected_gross.
-    observed_amount: Money | None
-    variance: Money | None
-    category: str | None
+    bank_row_id: str | None  # None when unlinked
+    batch_net_total: Money  # Population B money basis. NEVER expected_gross.
+    linked_amount: Money | None  # bank credit amount when linked
+    variance: Money | None  # batch_net_total - linked_amount
+    category: str | None  # see the note above; scored against true_category
     resolved_by: ResolutionSource | None
     confidence: Decimal | None
 
@@ -435,34 +464,38 @@ class RowVarianceOutcome(_Record):
 
 @dataclass(frozen=True)
 class AuditEntry(_Record):
-    """One recorded transition in an exception's life.
+    """Append-only. One per status change or evidence addition. SDD 3.
 
-    SPEC GAP, FLAGGED: SDD 3 declares `audit: tuple[AuditEntry, ...]` but never
-    defines the type. These fields are the minimum the SDD's own lifecycle
-    rules require to be checkable - it says the store records BOTH transitions
-    when a human resolves an abstention in one click, which needs from/to, and
-    it says exceptions are keyed to `arrival_day`, an int, never a timestamp
-    (D2/D6). There is deliberately no wall-clock field.
+    `sequence` is the field that makes the lifecycle representable. SDD 3 says
+    the store records BOTH transitions when a human resolves an abstention in
+    one click - ABSTAINED -> CONFIRMED and CONFIRMED -> CLOSED - and those
+    share an arrival_day. Ordering on arrival_day alone cannot distinguish
+    them, so the trail could not answer which happened first.
+
+    Both ordering fields are ints, supplied by the caller. There is no
+    wall-clock field anywhere here (D2), which is also why `sequence` has to
+    exist: a timestamp is the usual way to order two same-day events and is
+    exactly what this project forbids.
     """
 
-    from_status: ExceptionStatus | None  # None on creation
+    exception_id: str
+    arrival_day: int  # integer day index, never a timestamp (D2)
+    sequence: int  # ordering within a day; caller-supplied
+    from_status: ExceptionStatus | None  # None on the opening entry
     to_status: ExceptionStatus
-    arrival_day: int  # an int, never a timestamp
-    actor: ResolutionSource
-    reason: str
+    actor: AuditActor  # includes EXPORTER, unlike resolved_by
+    note: str
+    evidence_ids: tuple[str, ...]  # sorted
 
 
 @dataclass(frozen=True)
 class Exception_(_Record):
-    """Frozen, unlike the SDD's sketch.
+    """One detected, possibly-explained discrepancy. SDD 3.
 
-    SDD 3 writes `@dataclass` without frozen=True here while every other record
-    is frozen. Treated as an omission rather than an intent: a mutable
-    exception would let a caller assign `status = CLOSED` directly and bypass
-    the transition rules that the lifecycle section spends a paragraph
-    declaring, and `test_illegal_transitions_rejected` could then be satisfied
-    by a store that nobody is obliged to use. Transitions produce a new
-    instance; the store (M6) is the only writer.
+    Frozen, so a transition produces a new instance rather than mutating one.
+    A mutable exception would let a caller assign `status = CLOSED` directly
+    and bypass the transition rules the lifecycle section declares. The store
+    (M6) is the only writer.
     """
 
     exception_id: str  # deterministic: sha256(canonical tuple)[:16]

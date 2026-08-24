@@ -2,18 +2,18 @@
   "_comment": "sha256 of every normative document. Formatters and linters must leave these unchanged; tests/test_spec_present.py enforces it. Update ONLY when the specification is deliberately revised, in a commit that says so.",
   "documents": {
     "SettleSense_BUILD_PROMPTS.md": {
-      "bytes": 59412,
-      "sha256": "95fbf02e2ba4472b2fc67007ef4b74d320590a7d982ea34ff9894370f6c2f7d3"
+      "bytes": 64099,
+      "sha256": "1074d5933c04dd8c09d92132c5f19c49844836c89b3941d6e7402f2ef6935001"
     },
     "SettleSense_PDD.md": {
       "bytes": 21779,
       "sha256": "683f191e15f5c7d3bc00c8c6bd751918a90c5d96bfe0e8a3da097b63d5eee451"
     },
     "SettleSense_SDD.md": {
-      "bytes": 39092,
-      "sha256": "3891a539dd163218323cd12b78eae004dee440db259f5b3594d6753acfde5dd0"
+      "bytes": 41108,
+      "sha256": "64fbb57de14d3d1717e49f3e89aa13e7c214cce1f147e5296329be65f71b3850"
     }
   },
-  "revision": 2,
-  "supersedes_revision": 1
+  "revision": 3,
+  "supersedes_revision": 2
 }

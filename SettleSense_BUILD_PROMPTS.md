@@ -21,6 +21,45 @@ and tell me instead of complying. In particular:
         on a YAML float.
   D13 — every date in this repo is in 2026. A 2025 date anywhere is a defect.
 
+RULES EARNED IN M0-M1. These apply to every module from M2 onward.
+
+GENERATOR IS PERMANENTLY FROZEN at m1f-generator-freeze-2. The one allowed
+re-freeze is spent. If you find a generator defect now, record it in
+LIMITATIONS.md and work around it. NEVER modify gen/ again, for any reason.
+
+Test discipline:
+- An EMPTY table and a MISSING file are different. An empty table is legitimate
+  data (day 1 bank is header-only under T+N); a missing file is a delivery
+  failure. Collapsing both to "no rows" reports a clean reconciliation for a day
+  whose statement never arrived. Assert the distinction wherever files are read.
+- Never assert a literal count from a commit message, a doc, or my brief.
+  Assert against the realised count from the artifact, and PRINT it. A wrong
+  number in a commit message became a wrong assertion in a test once already.
+- Test the ARTIFACT, not a reconstruction of it. Rebuilding data in-process
+  with a fresh RNG measures a dataset that never ships.
+- Assert the precondition FIRED before asserting the property. A test that
+  silently skips is a failing test. Report the realised occurrence count.
+- Rate amplification: for any property about the INTERACTION of two or more
+  conditions, compute expected co-occurrence at production rates. If under 10,
+  the test MUST run amplified (typically 0.5-0.9). If amplifying a destructive
+  partner to 1.0 wipes out every analysable row, find the rate where both the
+  interaction occurs AND survivors remain, then assert on survivor count.
+- An injection must fail the test under BOTH the original bug AND the plausible
+  WRONG fix. A guard that green-lights the score-inflating direction is not a guard.
+- Verify the injection actually reaches the code under test. State injected
+  after the function returns is never seen by it.
+- Never shell out to a make target that includes the calling test's directory.
+  It recurses. Invoke pytest directly on a narrowed path.
+- Strip ANSI codes before regex-matching captured output.
+- Two independent statements must meet in exactly ONE place. Importing the
+  answer you are checking against makes a wrong value agree with itself.
+- Prefer import-time invariants over tests for partition/exhaustiveness checks.
+  A test can be deselected; an import cannot.
+
+Count and report guards separately in the test summary: config refusals,
+charter guards, truth self-check injections, noise accounting cases.
+A check that has only ever passed is unproven.
+
 Standing rules for this whole project:
 - Money is decimal.Decimal quantized to Decimal("0.01") with ROUND_HALF_UP. Never float.
 - No datetime.now(), date.today(), or time.time() anywhere in settlesense/. Inject as_of.
@@ -458,9 +497,16 @@ engine.py — orchestrator:
 - Passes execute in strict P1..P9 order; matched rows leave the pool
 - ReconciliationResult holds: matches (sorted by match_id), residuals (sorted by
   exception_id), per-pass counts, Population A value totals, Population B value totals.
-  Return CaseOutcome objects plus a SEPARATE batch-link result. Do NOT return generic
-  row-level `matches` and `residuals` lists — that blurs the two populations and is
-  exactly what D11 forbids.
+  Return CaseOutcome (Population A), BatchLinkOutcome (Population B) and
+  RowVarianceOutcome (Population C) as three SEPARATE collections. Do NOT return
+  generic row-level `matches` and `residuals` lists — that blurs the populations
+  and is exactly what D11 forbids.
+  Population C (SDD 3.1) covers variances whose subject is neither a payment nor
+  a batch: DUPLICATE_CONFIRMED ledger rows, orphan bank credits. Row-count
+  denominator. It has a home in ReconciliationResult.row_variances — populate it.
+  Categories come from taxonomy.VARIANCE_CATEGORIES only. Deduction categories
+  (MDR_FEE, GST_ON_FEE, REFUND_OFFSET) are components of expected_net and are
+  NEVER emitted as a variance (PDD 6.1).
 - exception_id = sha256 of canonical tuple, first 16 hex chars (D10)
 - Every list sorted explicitly before return (D4)
 
@@ -510,6 +556,15 @@ on valid data. Conserve over ReconciliationCase only:
     + unlinked batch value == total batch net_total. Assert explicitly that
     Population A and Population B totals are NOT added together anywhere, and that
     the two denominators differ on this fixture
+19a. Population C is conserved SEPARATELY on a ROW-COUNT denominator. Assert all
+     THREE denominators are distinct values on the seed-42 fixture, and that no
+     metric merges any two of them.
+19b. COMPLETENESS: iterate every variance present in truth and assert it lands in
+     exactly one of the three populations. Zero homeless variances. This is what
+     stops a fourth grain appearing silently at M5.
+19c. Every emitted category is in taxonomy.VARIANCE_CATEGORIES. Assert no
+     deduction category (MDR_FEE, GST_ON_FEE, REFUND_OFFSET) is ever emitted as
+     a variance — they are components of expected_net, not differences.
 20. A split-settlement payment (>=2 PAYMENT lines) yields exactly ONE case with
     len(payment_line_ids) >= 2 — never two cases. A case with one payment line plus a
     refund line is NOT a split settlement: assert len(payment_line_ids) == 1 there. This is the regression test
@@ -633,13 +688,19 @@ Write tests/test_m5_eval.py. All LLM baselines use the replay client — no netw
 
 Denominator discipline (SDD 3.1) — check these FIRST:
 0a. Every Population A metric divides by len(cases). Assert the denominator equals the
-    ReconciliationCase count, not row counts, not settlement rows, not bank rows.
-0b. Batch-to-bank link metrics appear under a SEPARATE key in results.json and have
-    their own denominator (batch count). Assert the two never appear in one table.
-0c. A fixture where batch count and case count differ produces two clearly different
+    ReconciliationCase count, not row counts, not settlement lines, not bank rows.
+0b. Batch-to-bank link metrics appear under a SEPARATE key in results.json with their
+    own denominator (batch count). Assert they never appear in one table with A.
+0c. Population C metrics appear under a THIRD key with a row-count denominator.
+    Assert all three denominators are distinct on the seed-42 fixture and that no
+    reported metric merges any two.
+0d. A fixture where batch, case and row counts differ produces three clearly different
     denominators — assert they are not accidentally equal, which would hide a bug.
-0d. One batch-to-bank failure containing 5 cases degrades Population A by exactly
+0e. One batch-to-bank failure containing 5 cases degrades Population A by exactly
     5 cases, each counted once — not 1, not 10.
+0f. Every money metric names its basis in its own key: gross-exposure (expected_gross),
+    expected-net cash (expected_net), batch-net (batch.net_total). Assert no key
+    contains the bare string "money_weighted" — it is ambiguous and prohibited.
 
 Metrics correctness (hand-computed fixtures):
 1. Match rate on a 10-CASE fixture with 7 confirmed cases == Decimal("0.70") exactly
@@ -673,6 +734,16 @@ Runner:
 Guard:
 16. Assert no network calls occur during the entire test module (monkeypatch socket)
 ```
+
+HELD-OUT DISCIPLINE — read before running anything:
+- Run the dev seed (42) as often as you like while building.
+- The HOLDOUT (seed 999) is run ONCE, at the end, and the number is recorded
+  whatever it is. Do not inspect the holdout residual set and then adjust the
+  matcher. The moment you iterate against results you have seen, the held-out
+  set stops being held out and every claim in the submission weakens.
+- If a holdout number is disappointing, that is the finding. Report it.
+- Record the dev and holdout numbers SEPARATELY in the README. A single blended
+  figure hides which one was tuned against.
 
 **Verify:** `make eval` produces real numbers. **Paste them into README.md immediately** — this is the moment the project stops being a plan.
 

@@ -51,7 +51,8 @@ settlesense/
 ├── settlesense/
 │   ├── types.py                 # Money, domain records, Exception model
 │   ├── config.py                # typed config loading
-│   ├── normalize.py             # M2
+│   ├── ingest.py                # M2 — ALL file I/O lives here
+│   ├── normalize.py             # M2 — pure functions only, zero I/O
 │   ├── matching/
 │   │   ├── exact.py             # M3
 │   │   ├── arithmetic.py        # fee/GST/rounding
@@ -323,7 +324,7 @@ class BankRow:
 ### Exception model
 
 ```python
-@dataclass
+@dataclass(frozen=True)
 class Exception_:
     exception_id: str          # deterministic: sha256(canonical tuple)[:16]
     category: str              # from closed taxonomy
@@ -337,6 +338,18 @@ class Exception_:
     confirmed_day: int | None
     closed_day: int | None
     audit: tuple[AuditEntry, ...]
+
+@dataclass(frozen=True)
+class AuditEntry:
+    """Append-only. One per status change or evidence addition."""
+    exception_id: str
+    arrival_day: int              # integer day index, never a timestamp (D2)
+    sequence: int                 # ordering within a day; caller-supplied
+    from_status: ExceptionStatus | None   # None on the opening entry
+    to_status: ExceptionStatus
+    actor: str                    # DETERMINISTIC | AI_VERIFIED | HUMAN | EXPORTER
+    note: str
+    evidence_ids: tuple[str, ...] # sorted
 ```
 
 ### Exception lifecycle — CONFIRMED means explained, CLOSED means actioned
@@ -372,6 +385,8 @@ when a human approves both steps in one click; the store records both transition
 | `ABSTAINED` | No hypothesis passed; needs a human | Abstention rate |
 | `CLOSED` | Confirmed **and** the accounting action was emitted | Export metrics only |
 
+`ExceptionStatus` has exactly these **six** members. `HUMAN_REVIEW` in the diagram above is **not a status** — it is the M8 review queue, i.e. where an `ABSTAINED` exception waits. Treating it as a seventh status would make the abstention-rate denominator ambiguous, since an exception would leave `ABSTAINED` merely by being looked at.
+
 Enforced rules: **only `CONFIRMED` may transition to `CLOSED`** — `OPEN→CLOSED`, `ABSTAINED→CLOSED` and `PENDING_*→CLOSED` all raise; `CLOSED` is terminal; the exporter is the sole writer of `CLOSED`; accuracy metrics read `CONFIRMED`, never `CLOSED`; the exporter reads `CONFIRMED` and writes `CLOSED`. `test_illegal_transitions_rejected` asserts every non-listed transition raises.
 
 ---
@@ -401,7 +416,9 @@ ingest ─▶ normalize ─▶ deterministic match ─▶ residual set
 
 - UTR: uppercase, strip non-alphanumerics, collapse whitespace. Retain both `raw` and `normalized`.
 - Amounts: strip `₹`, thousands separators, handle `1,234.00` / `1234.0` / `1234` / `(1234.00)` for debits → `Decimal`.
-- Dates: parse a fixed allow-list of formats. Ambiguous DD/MM vs MM/DD is resolved by merchant profile config, never guessed. See §4.1a — **four distinct date concepts** must never be conflated.
+- Dates: parse a fixed allow-list of ISO formats. A date with exactly one valid reading parses; a genuinely ambiguous one (`03/04/2026`) **raises** rather than being guessed. `parse_date(raw, rule)` takes a resolved rule, not a profile name — there is deliberately no config key, because every source in the frozen dataset emits ISO and a key with zero consumers is worse than none. Wire a rule through when a source actually emits an ambiguous date.
+- **Month-name formats are refused outright.** `strptime`'s `%b` resolves through the process locale, and a locale-dependent parser inside a byte-compared system is precisely the hazard D1/D6 exist to prevent.
+- See §4.1a — **four distinct date concepts** must never be conflated.
 - Narrations: uppercase, collapse whitespace, extract UTR candidates by regex; keep all candidates, ranked.
 - Every normalization is a pure function with a unit test containing at least one hostile input.
 
@@ -640,6 +657,18 @@ class ReconciliationResult:
     exceptions: tuple[Exception_, ...]         # sorted by exception_id
     calendar_version: str
     config_hash: str
+
+@dataclass(frozen=True)
+class BatchLinkOutcome:
+    """Population B. One per settlement batch. Batch-count denominator."""
+    batch_id: str
+    status: ExceptionStatus
+    bank_row_id: str | None       # None when unlinked
+    batch_net_total: Money
+    linked_amount: Money | None   # bank credit amount when linked
+    variance: Money | None        # batch_net_total - linked_amount
+    resolved_by: str | None       # DETERMINISTIC | AI_VERIFIED | HUMAN
+    confidence: Decimal | None
 
 @dataclass(frozen=True)
 class RowVarianceOutcome:
