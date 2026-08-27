@@ -63,7 +63,7 @@ from settlesense.ai.hypothesis import (
     generate,
     parse_hypotheses,
 )
-from settlesense.ai.loop import AbstainReason, run_loop
+from settlesense.ai.loop import AbstainReason, resolve_exception, run_loop
 from settlesense.ai.verifier import (
     FIELD_GRAMMAR,
     GrammarError,
@@ -1035,3 +1035,256 @@ def test_ranked_hypotheses_earn_their_keep() -> None:
         f"one ({top}), so verifying in rank order buys nothing on this sample"
     )
     print(f"\n  top-ranked correct {top}/40; decisive nomination correct {decisive}/40")
+
+
+# ===========================================================================
+# 7. Nomination shape and rank-order recovery (28-30)
+# ===========================================================================
+
+
+def _duplicate_hypothesis(
+    candidate: object, evidence: tuple[str, ...], rank: int = 0, assertion: Assertion | None = None
+) -> Hypothesis:
+    """A DUPLICATE_CANDIDATE claim with an arbitrary nomination shape.
+
+    `candidate` is typed `object` on purpose: requirement 29 feeds shapes the
+    field's `str` annotation forbids, and a test that could only construct
+    well-typed values could not reach the code that handles ill-typed ones.
+    """
+    return Hypothesis(
+        category=DUPLICATE,
+        candidate_id=candidate,  # type: ignore[arg-type]
+        assertion=assertion,
+        residual_amount=None,
+        evidence_row_ids=evidence,
+        reason="constructed for a nomination-shape test",
+        rank=rank,
+    )
+
+
+def test_28_a_pair_id_nomination_reaches_the_structural_path(
+    exceptions: tuple[Exception_, ...], dataset: Any, config: AppConfig
+) -> None:
+    """28. Both shapes dispatch structurally; neither falls through to arithmetic.
+
+    THIS PATH WAS UNEXERCISED WHILE EVERY TEST PASSED. Every synthetic client
+    in this suite supplies a single row id, because the same hand wrote the
+    clients and the parser. The real model returned the PAIR id
+    "ORD_A-ORD_B" on all 40 recorded decisions - a shape nothing here had ever
+    produced. Fixtures built by the author of the parser do not discover the
+    parser's assumptions.
+
+    The pair id is REJECTED, and that is correct: it names neither row, so
+    there is nothing to check. What matters is that it is rejected by the
+    NOMINATION check with a reason a prompt author can act on - not by the
+    field grammar, which would say "assertion did not parse" about a claim that
+    carried no assertion.
+    """
+    pair = exceptions[0].evidence_row_ids
+    single, other = pair
+    pair_id = f"{single}-{other}"
+
+    for label, candidate in (("single row", single), ("pair id", pair_id)):
+        result = verify(_duplicate_hypothesis(candidate, pair), dataset, config)
+        # STRUCTURAL: these check names exist only on that path.
+        assert "both_rows_exist" in result.checks_run, (label, result.checks_run)
+        assert "grammar" not in result.checks_run, (
+            f"{label} fell through to the ARITHMETIC path: {result.checks_run}"
+        )
+        assert "did not parse" not in result.failure_reason, (label, result.failure_reason)
+
+    rejected = verify(_duplicate_hypothesis(pair_id, pair), dataset, config)
+    assert not rejected.passed
+    assert rejected.checks_run[-1] == "nomination_in_pair", rejected.checks_run
+    assert pair_id in rejected.failure_reason, rejected.failure_reason
+    print(
+        f"\n  single row -> structural; pair id -> structural, rejected at "
+        f"{rejected.checks_run[-1]}"
+    )
+
+
+@pytest.mark.boundary_refusal
+def test_29_nomination_shapes_the_verifier_was_not_designed_for_are_rejected(
+    exceptions: tuple[Exception_, ...], dataset: Any, config: AppConfig
+) -> None:
+    """29. Four hostile shapes. Each REJECTED with a name, none misrouted.
+
+    THIS FOUND A REAL CRASH. `nominated not in {id_a, id_b}` raises TypeError -
+    unhashable - when handed a list or a dict, which loses the whole run rather
+    than rejecting one claim. A verifier whose job is refusing bad input must
+    not be the thing that falls over on it.
+
+    A rejection for the WRONG reason looks identical to the architecture
+    working, so each shape is checked against the specific check that caught it
+    rather than merely against `passed is False`.
+    """
+    pair = exceptions[0].evidence_row_ids
+    shapes: dict[str, object] = {
+        "bare string": "not-an-order-id",
+        "list of two": list(pair),
+        "dict with a rows key": {"rows": list(pair)},
+        "none at all": None,
+    }
+    caught: dict[str, str] = {}
+    for label, candidate in shapes.items():
+        result = verify(_duplicate_hypothesis(candidate, pair), dataset, config)
+        assert not result.passed, f"{label} was CONFIRMED"
+        assert result.failure_reason, f"{label} rejected with no reason given"
+        assert "grammar" not in result.checks_run, (
+            f"{label} was misrouted to the arithmetic path: {result.checks_run}"
+        )
+        caught[label] = result.checks_run[-1]
+
+    # The two families are caught by DIFFERENT checks, and that distinction is
+    # the point: a well-formed string that names no row is a prompt problem; a
+    # non-string is a caller problem.
+    assert caught["bare string"] == "nomination_in_pair", caught
+    assert caught["list of two"] == caught["dict with a rows key"] == "nomination_shape", caught
+    assert caught["none at all"] == "nomination_shape", caught
+    print(f"\n  {len(shapes)} hostile shapes, all rejected: {caught}")
+
+
+@pytest.mark.charter_guard
+def test_29b_the_parser_also_refuses_a_non_string_nomination() -> None:
+    """DEFENCE IN DEPTH. The parser drops it; the verifier rejects it.
+
+    Two layers because they are separately reachable: `generate()` goes through
+    the parser, but `verify()` is public and a caller can construct a
+    Hypothesis directly - which is exactly how the TypeError above arrived.
+    """
+    payload = {
+        "hypotheses": [
+            {
+                "category": DUPLICATE,
+                "candidate_id": ["ORD_A", "ORD_B"],
+                "evidence_row_ids": ["ORD_A", "ORD_B"],
+                "reason": "a list where a row id belongs",
+            },
+            {
+                "category": DUPLICATE,
+                "candidate_id": "ORD_A",
+                "evidence_row_ids": ["ORD_A", "ORD_B"],
+                "reason": "well formed",
+            },
+        ]
+    }
+    parsed = parse_hypotheses(payload)
+    assert len(parsed) == 1, [h.candidate_id for h in parsed]
+    assert parsed[0].candidate_id == "ORD_A"
+    print("\n  parser dropped the list nomination and kept the well-formed one")
+
+
+class _RankedStubClient:
+    """Returns a fixed ranked list. No network, no fixtures.
+
+    Constructed per test so the nominations can be ordered deliberately, which
+    is the only way to build the rank-0-fails/rank-1-passes case: no real model
+    can be made to produce it on demand.
+    """
+
+    def __init__(self, nominations: list[str], evidence: tuple[str, ...]) -> None:
+        self._nominations = nominations
+        self._evidence = evidence
+        self.calls: list[str] = []
+
+    def complete(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+        del schema
+        self.calls.append(prompt)
+        return {
+            "hypotheses": [
+                {
+                    "category": DUPLICATE,
+                    "candidate_id": nomination,
+                    "evidence_row_ids": list(self._evidence),
+                    "reason": f"ranked {rank}",
+                }
+                for rank, nomination in enumerate(self._nominations)
+            ]
+        }
+
+
+def test_30_the_loop_recovers_when_the_top_ranked_hypothesis_fails(
+    exceptions: tuple[Exception_, ...], dataset: Any, config: AppConfig
+) -> None:
+    """30. Rank 0 fails verification, rank 1 passes, the loop takes rank 1.
+
+    VERIFICATION STEERS, IT DOES NOT ONLY BRAKE. This is the property behind
+    the README's 24/40 -> 33/40 line: the model's top guess is right less often
+    than the nomination the verifier ends up acting on, because it tries each
+    in rank order and discards what does not check out. Without this test that
+    is a claim in a document with nothing holding it.
+
+    Built on a REAL pair whose two rows have different settlement chains, so
+    the pass and the failure are both produced by the actual structural check
+    rather than by a stubbed verifier.
+    """
+    from settlesense.ai.verifier import _chain_length
+
+    candidates = [
+        exception
+        for exception in exceptions
+        if len({_chain_length(row, dataset) for row in exception.evidence_row_ids}) == 2
+    ]
+    assert candidates, (
+        "no pair in this dataset has distinguishable settlement chains, so no "
+        "nomination can pass and this test cannot exercise recovery"
+    )
+    exception = candidates[0]
+    first, second = exception.evidence_row_ids
+    passing = min(exception.evidence_row_ids, key=lambda row: _chain_length(row, dataset))
+    failing = second if passing == first else first
+
+    # RANK 0 IS THE ONE THAT FAILS. If the order were reversed the loop would
+    # take rank 0 and the test would pass while proving nothing.
+    client = _RankedStubClient([failing, passing], exception.evidence_row_ids)
+    outcome = resolve_exception(exception, dataset, config, client)
+
+    assert outcome.confirmed, f"nothing was confirmed: {outcome.abstain_reason}"
+    assert outcome.hypothesis is not None
+    assert outcome.hypothesis.candidate_id == passing, (
+        f"the loop confirmed {outcome.hypothesis.candidate_id}, not the rank-1 nomination {passing}"
+    )
+    assert outcome.hypothesis.rank == 1, outcome.hypothesis.rank
+
+    # BOTH ATTEMPTS RECORDED. The rejected one is not discarded: an M8 reviewer
+    # needs to see what was tried and why it did not hold.
+    assert outcome.hypotheses_seen == 2, outcome.hypotheses_seen
+    assert len(outcome.rejections) == 1, outcome.rejections
+    assert "settlement lines" in outcome.rejections[0], outcome.rejections[0]
+    print(
+        f"\n  rank 0 ({failing}) rejected: {outcome.rejections[0][:60]}...\n"
+        f"  rank 1 ({passing}) confirmed; {outcome.hypotheses_seen} attempts recorded"
+    )
+
+
+@pytest.mark.charter_guard
+def test_30b_recovery_is_not_the_loop_confirming_whatever_comes_last(
+    exceptions: tuple[Exception_, ...], dataset: Any, config: AppConfig
+) -> None:
+    """FAULT INJECTION for 30. Reverse the ranking; rank 0 must now win.
+
+    Without this, test 30 passing is equally consistent with a loop that always
+    takes the LAST hypothesis. Same pair, same two nominations, opposite order.
+    """
+    from settlesense.ai.verifier import _chain_length
+
+    exception = next(
+        exception
+        for exception in exceptions
+        if len({_chain_length(row, dataset) for row in exception.evidence_row_ids}) == 2
+    )
+    passing = min(exception.evidence_row_ids, key=lambda row: _chain_length(row, dataset))
+    failing = next(row for row in exception.evidence_row_ids if row != passing)
+
+    client = _RankedStubClient([passing, failing], exception.evidence_row_ids)
+    outcome = resolve_exception(exception, dataset, config, client)
+
+    assert outcome.confirmed and outcome.hypothesis is not None
+    assert outcome.hypothesis.rank == 0, (
+        "the loop did not take the first PASSING hypothesis - it is selecting by "
+        "position rather than by verification"
+    )
+    assert outcome.rejections == (), (
+        f"a hypothesis was rejected before the passing one: {outcome.rejections}"
+    )
+    print("\n  ranking reversed -> rank 0 confirmed, 0 rejections (first pass wins)")

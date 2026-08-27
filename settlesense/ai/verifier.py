@@ -181,6 +181,17 @@ distinguish the rows.
 """
 
 
+def _is_a_string(value: object) -> bool:
+    """isinstance, behind a signature typed `object`.
+
+    Called on a field ANNOTATED `str`, so an inline isinstance would be narrowed
+    away by the type checker as unreachable - and the runtime check would be
+    deleted by the next person who believed it. The annotation is a promise
+    about callers, not a guarantee about the value.
+    """
+    return isinstance(value, str)
+
+
 def verify(hypothesis: Hypothesis, dataset: DayDataset, config: AppConfig) -> VerificationResult:
     """The one entry point. Resolve evidence, then take the matching path."""
     tolerance = config.thresholds.tolerance.verifier_rupees
@@ -209,6 +220,27 @@ def verify(hypothesis: Hypothesis, dataset: DayDataset, config: AppConfig) -> Ve
             computed_residual=None,
             failure_reason="the hypothesis cites no evidence, so there is nothing to check",
             checks_run=("evidence_resolution",),
+        )
+
+    # THE NOMINATION MUST BE A STRING before anything compares it.
+    #
+    # `candidate_id` is typed `str` and `parse_hypotheses` drops anything else,
+    # so a list or dict can only arrive from a caller constructing a Hypothesis
+    # directly. It did arrive, in a test: `nominated not in {id_a, id_b}` on a
+    # list raises TypeError - unhashable - which CRASHES the run instead of
+    # rejecting one claim. A verifier whose job is to refuse bad input must not
+    # be the thing that falls over on it, and this is the entry point, not a
+    # private helper.
+    if not _is_a_string(hypothesis.candidate_id):
+        return VerificationResult(
+            passed=False,
+            computed_residual=None,
+            failure_reason=(
+                f"candidate_id is {type(hypothesis.candidate_id).__name__}, not a "
+                "string; a nomination names one row and cannot be a collection"
+            ),
+            checks_run=("nomination_shape",),
+            evidence_completeness=completeness,
         )
 
     # CATEGORY FIRST. See STRUCTURAL_CATEGORIES for why an assertion supplied
