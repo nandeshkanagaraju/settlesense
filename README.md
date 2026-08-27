@@ -77,15 +77,23 @@ Median of 3 repetitions, **never the best run**. No model calls. Full table in
 
 | Records | Cases | Input rows | Pipeline (s) | Cases/s | Peak MiB |
 |---:|---:|---:|---:|---:|---:|
-| 500 | 502 | 1,626 | 0.041 | **12,341** | 1.8 |
-| 5,000 | 5,026 | 15,779 | 0.326 | **15,405** | 19.4 |
-| 25,000 | 25,123 | 78,594 | 1.944 | **12,925** | 94.9 |
-| 100,000 | 100,506 | 313,869 | 8.530 | **11,783** | 379.7 |
+| 500 | 502 | 1,626 | 0.046 | **10,908** | 1.8 |
+| 5,000 | 5,026 | 15,779 | 0.328 | **15,306** | 19.4 |
+| 25,000 | 25,123 | 78,594 | 1.936 | **12,976** | 94.9 |
+| 100,000 | 100,506 | 313,869 | 8.467 | **11,870** | 379.7 |
 
 Pipeline = ingest + engine; dataset generation is excluded from the timed
 region and reported separately. 100k was **attempted and measured** because 25k
 finished inside the two-minute budget that gates it — a skipped row would have
 been absent, never extrapolated.
+
+**Durations move between runs; nothing else does.** Across re-runs every count
+above is bit-identical — cases, input rows, residuals, peak memory — while the
+seconds and the rates derived from them vary by a few percent. That is the
+expected shape: the pipeline is deterministic and the clock is not, which is
+precisely why telemetry is a separate return value and never enters the result.
+`tests/test_bench.py` cross-checks this table against `reports/bench.md` row by
+row, so a stale README fails the suite rather than quietly misreporting.
 
 **The residual share is the architectural argument.** The deterministic layer
 carries the volume; the expensive stage is sized by ambiguity, not by rows:

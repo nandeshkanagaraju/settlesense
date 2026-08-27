@@ -8,14 +8,14 @@ Median of 3 repetitions, never the best run. Dev seed (42) — the holdout is ne
 
 | Records | Cases | Input rows | Ingest (s) | Engine (s) | Pipeline (s) | Cases/s | Rows/s | Peak MiB |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 500 | 502 | 1,626 | 0.027 | 0.013 | 0.041 | 12,341 | 39,974 | 1.8 |
-| 5,000 | 5,026 | 15,779 | 0.211 | 0.115 | 0.326 | 15,405 | 48,364 | 19.4 |
-| 25,000 | 25,123 | 78,594 | 1.136 | 0.808 | 1.944 | 12,925 | 40,435 | 94.9 |
-| 100,000 | 100,506 | 313,869 | 4.538 | 3.992 | 8.530 | 11,783 | 36,796 | 379.7 |
+| 500 | 502 | 1,626 | 0.031 | 0.015 | 0.046 | 10,908 | 35,330 | 1.8 |
+| 5,000 | 5,026 | 15,779 | 0.212 | 0.116 | 0.328 | 15,306 | 48,054 | 19.4 |
+| 25,000 | 25,123 | 78,594 | 1.128 | 0.808 | 1.936 | 12,976 | 40,594 | 94.9 |
+| 100,000 | 100,506 | 313,869 | 4.523 | 3.944 | 8.467 | 11,870 | 37,069 | 379.7 |
 
 Pipeline = ingest + engine. Dataset generation is excluded from the timed region and reported separately below; it is scaffolding for the benchmark, not part of the system under test.
 
-**100,000 records: attempted and measured**, because 25,000 completed in 1.944s — inside the 120s budget that gates it.
+**100,000 records: attempted and measured**, because 25,000 completed in 1.936s — inside the 120s budget that gates it.
 
 ## Per-stage, at the largest size measured
 
@@ -23,16 +23,16 @@ Stages are listed in PASS ORDER, so P2 preceding P8 is readable straight down th
 
 | Stage | Seconds | Records in | Records/s |
 |---|---:|---:|---:|
-| P7a duplicates confirmed | 0.088 | 101,007 | 1,153,250 |
-| P7b duplicate pairing | 0.195 | 101,007 | 517,054 |
-| P1 build cases | 2.201 | 100,506 | 45,656 |
-| P3/P4/P6/P7b/P9 case classification | 1.243 | 100,506 | 80,845 |
-| batch profile derivation | 0.152 | 106,392 | 700,292 |
-| P2 exact batch<->bank | 0.002 | 39 | 22,963 |
-| P2b full-UTR within tolerance | 0.002 | 39 | 16,264 |
-| P8 fuzzy UTR | 0.001 | 14 | 24,479 |
-| unresolved batch categorisation | 0.000 | 2 | 101,482 |
-| row-grain variance assembly | 0.001 | 39 | 56,518 |
+| P7a duplicates confirmed | 0.086 | 101,007 | 1,174,711 |
+| P7b duplicate pairing | 0.197 | 101,007 | 512,811 |
+| P1 build cases | 2.190 | 100,506 | 45,888 |
+| P3/P4/P6/P7b/P9 case classification | 1.244 | 100,506 | 80,802 |
+| batch profile derivation | 0.158 | 106,392 | 671,358 |
+| P2 exact batch<->bank | 0.002 | 39 | 24,213 |
+| P2b full-UTR within tolerance | 0.002 | 39 | 16,502 |
+| P8 fuzzy UTR | 0.001 | 14 | 24,931 |
+| unresolved batch categorisation | 0.000 | 2 | 103,226 |
+| row-grain variance assembly | 0.001 | 39 | 55,602 |
 
 `P3/P4/P6/P7b/P9 case classification` is ONE row because those five passes are fused in a single walk over each case. Splitting them would mean restructuring the hot loop so a report could have more rows. The batch-grain passes below it are genuinely separate phases and are timed separately.
 

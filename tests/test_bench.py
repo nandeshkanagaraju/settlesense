@@ -405,11 +405,18 @@ def test_14b_the_report_states_which_sizes_ran_and_which_were_skipped(
     _path, skipped_report = bench_run
     assert f"{STRETCH_SIZE:,} records" in skipped_report, "the skipped size is not named"
     assert "not attempted" in skipped_report, "a skipped size is not declared skipped"
-    skipped_sizes = [int(row[0].replace(",", "")) for row in _data_rows(skipped_report)]
-    assert STRETCH_SIZE not in skipped_sizes, (
-        f"{STRETCH_SIZE:,} has a table row in a run that did not measure it - "
-        "that row can only have been extrapolated"
-    )
+    # BOTH tables, checked separately. Reading the whole report into one list
+    # reported "sizes [500, 500]" - the same size once per table - which is
+    # true but unreadable, and would have hidden a 100k row appearing in one
+    # table and not the other.
+    skipped_scaling, skipped_ai = skipped_report.split("## AI stage")
+    for section, label in ((skipped_scaling, "scaling"), (skipped_ai, "AI stage")):
+        sizes = [int(row[0].replace(",", "")) for row in _data_rows(section)]
+        assert STRETCH_SIZE not in sizes, (
+            f"{STRETCH_SIZE:,} has a row in the {label} table of a run that did "
+            "not measure it - that row can only have been extrapolated"
+        )
+    skipped_sizes = [int(row[0].replace(",", "")) for row in _data_rows(skipped_scaling)]
 
     committed = COMMITTED_BENCH.read_text(encoding="utf-8")
     measured = [
