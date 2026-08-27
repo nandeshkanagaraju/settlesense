@@ -36,6 +36,23 @@ obvious rule, and PDD 6.2 anticipates exactly this migration. Building it now
 would be tuning against the holdout. It belongs in a version whose evaluation
 uses a seed nobody has looked at.
 
+## No throughput figure exists for the held-out set, and none can be taken now
+
+`eval/run_eval.py` collects no telemetry — it emits accuracy only. So the
+holdout run recorded Populations A, B and C and **no records/second**. Every
+throughput number in this project comes from `make bench` on seed 42 and from
+synthetic scaling to 100,000 records.
+
+This was noticed when a report of the holdout was asked for and throughput was
+in the list. The fix is one line — hand `run_eval` the M5a `StageTimer`. It is
+not being made, because taking a throughput reading now means running seed 999 a
+second time, and the run is spent. Throughput is a property of the machine and
+the record count rather than of the noise mix, so the dev figures are the better
+estimate anyway; what is missing is the confirmation, not the number.
+
+Recorded rather than quietly omitted, because a reader comparing the dev and
+holdout tables will notice one row present in one and absent in the other.
+
 ## The duplicate-pair task is fingerprinted, and the fingerprint is worthless
 
 **Every injected duplicate carries an `-R###` suffix on its invoice number.**

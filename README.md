@@ -394,7 +394,7 @@ checkable — `git log` shows this text predating the numbers.
 | Seed range | Role | Used for |
 |---|---|---|
 | 42 | dev | Building M2–M5. Inspected freely. Tuned-on, so reported as an upper bound. |
-| 999 | holdout | Includes the two withheld noise types. Run ONCE, at the end. Not yet run. |
+| 999 | holdout | Includes the two withheld noise types. **Run ONCE, on 2026-08-27 (`0c44419`). Spent.** [Results.](#held-out-set--seed-999-make-eval-holdout) |
 | **1000–1019** | **AI evaluation** | **M7 onward. The measurement surface.** Results may be inspected and iterated against; the *membership* is frozen. |
 
 **This set is not a second holdout.** Looking at its per-seed results and
