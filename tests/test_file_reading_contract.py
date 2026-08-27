@@ -47,6 +47,7 @@ REGISTERED_READERS = frozenset(
         "eval/run_eval.py",
         "eval/run_eval_ai.py",
         "eval/bench.py",
+        "settlesense/exceptions/store.py",
         "settlesense/ai/client.py",
     }
 )
@@ -245,12 +246,39 @@ def _bench_empty(tmp: Path) -> str:
     return "counted, zero rows"
 
 
+def _store_missing(tmp: Path) -> str:
+    """A day file that was never delivered."""
+    from settlesense.exceptions.store import ExceptionStore, MissingFileError
+
+    with ExceptionStore() as store, pytest.raises(MissingFileError) as caught:
+        store.ingest_file(tmp / "day1_bank.csv", arrival_day=1, arrival_seq=1)
+    return str(caught.value)
+
+
+def _store_empty(tmp: Path) -> str:
+    """A header-only day file. Ingested, recorded, and flagged as empty.
+
+    The store must be able to say "this arrived and had no rows", which is a
+    different sentence from "this never arrived" - and on this dataset day 1's
+    bank table really is header-only, because settlement is T+N.
+    """
+    from settlesense.exceptions.store import ExceptionStore
+
+    path = tmp / "day1_bank.csv"
+    path.write_text("bank_txn_id,value_date,amount,narration,direction\n", encoding="utf-8")
+    with ExceptionStore() as store:
+        result = store.ingest_file(path, arrival_day=1, arrival_seq=1)
+    assert result.is_empty and not result.skipped and result.row_count == 0
+    return result.outcome
+
+
 CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "settlesense/ingest.py": (_ingest_missing, lambda _tmp: _ingest_empty()),
     "settlesense/config.py": (_config_missing, _config_empty),
     "eval/run_eval.py": (_run_eval_missing, _run_eval_empty),
     "eval/run_eval_ai.py": (_run_eval_ai_missing, _run_eval_ai_empty),
     "eval/bench.py": (_bench_missing, _bench_empty),
+    "settlesense/exceptions/store.py": (_store_missing, _store_empty),
     "settlesense/ai/client.py": (_replay_missing, _replay_empty),
 }
 

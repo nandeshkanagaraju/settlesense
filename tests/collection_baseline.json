@@ -5,9 +5,9 @@
     "tests/test_bench.py": 22,
     "tests/test_config_completeness.py": 24,
     "tests/test_determinism_guard.py": 17,
-    "tests/test_env_integrity.py": 63,
+    "tests/test_env_integrity.py": 64,
     "tests/test_eval_set.py": 49,
-    "tests/test_file_reading_contract.py": 13,
+    "tests/test_file_reading_contract.py": 14,
     "tests/test_gen_ids.py": 9,
     "tests/test_generator_freeze.py": 9,
     "tests/test_ingest.py": 25,
@@ -29,10 +29,11 @@
     "tests/test_row_variances.py": 14,
     "tests/test_spec_present.py": 13,
     "tests/test_split_pricing.py": 9,
+    "tests/test_store.py": 34,
     "tests/test_timing.py": 20,
     "tests/test_truth_independence.py": 11,
     "tests/test_types_money.py": 33,
     "tests/test_verbosity_honoured.py": 8
   },
-  "total": 877
+  "total": 913
 }
