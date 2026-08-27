@@ -17,3 +17,10 @@
 eval/*
 !eval/results.json
 !eval/results.md
+
+# bench.md is committed for the same reason: the README quotes its throughput
+# figures, and the machine spec in its header is what makes them a measurement
+# rather than a boast. Durations differ run to run - that is what a median of
+# three is for - so this file is evidence of a real run on a stated machine,
+# not a byte-stable artifact like results.json.
+!bench.md

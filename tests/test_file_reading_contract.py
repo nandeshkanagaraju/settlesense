@@ -46,6 +46,7 @@ REGISTERED_READERS = frozenset(
         "settlesense/config.py",
         "eval/run_eval.py",
         "eval/run_eval_ai.py",
+        "eval/bench.py",
         "settlesense/ai/client.py",
     }
 )
@@ -218,11 +219,38 @@ def _replay_empty(tmp: Path) -> str:
     return f"corrupt fixture: {caught.value}"
 
 
+def _bench_missing(tmp: Path) -> str:
+    """A data directory that was never generated.
+
+    This is the case bench.py originally got WRONG: `Path.glob` on a missing
+    directory yields nothing instead of raising, so the row counter returned 0
+    and the scaling table would have printed a clean `0 input rows` for a
+    dataset that does not exist.
+    """
+    from eval.bench import _input_rows
+
+    with pytest.raises(SystemExit) as caught:
+        _input_rows(tmp / "absent")
+    return str(caught.value)
+
+
+def _bench_empty(tmp: Path) -> str:
+    """Day files that EXIST and carry only a header. Legitimate data."""
+    from eval.bench import _input_rows
+
+    (tmp / "day1_bank.csv").write_text(
+        "bank_txn_id,value_date,amount,narration,direction\n", encoding="utf-8"
+    )
+    assert _input_rows(tmp) == 0
+    return "counted, zero rows"
+
+
 CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "settlesense/ingest.py": (_ingest_missing, lambda _tmp: _ingest_empty()),
     "settlesense/config.py": (_config_missing, _config_empty),
     "eval/run_eval.py": (_run_eval_missing, _run_eval_empty),
     "eval/run_eval_ai.py": (_run_eval_ai_missing, _run_eval_ai_empty),
+    "eval/bench.py": (_bench_missing, _bench_empty),
     "settlesense/ai/client.py": (_replay_missing, _replay_empty),
 }
 

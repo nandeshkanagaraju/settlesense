@@ -56,7 +56,17 @@ FLOAT_RANDOM_METHODS = frozenset(
 # SDD 8.1 permits float in telemetry ONLY: `StageTiming.seconds` is never
 # compared, hashed, or goldened. The exemption is by module path so it cannot
 # quietly widen to the business result.
-FLOAT_ANNOTATION_EXEMPT = ("settlesense/core/telemetry.py",)
+#
+# eval/bench.py joined the list at M5a. Its ENTIRE output is durations, rates
+# and byte counts written to reports/bench.md - it computes nothing that any
+# other module reads, imports no state store, and appears in no result's type
+# graph. `test_the_float_exemption_stays_narrow` below asserts exactly those
+# properties rather than taking this comment's word for it.
+#
+# The float LITERAL and `float()` scans have NO exemption and apply to both
+# files. A duration arriving from perf_counter or statistics.median is the
+# correct type; a hand-typed 0.5 in either module would still be a violation.
+FLOAT_ANNOTATION_EXEMPT = ("settlesense/core/telemetry.py", "eval/bench.py")
 
 
 def _sources() -> list[pathlib.Path]:
@@ -347,3 +357,66 @@ def test_a_rate_needing_rounding_resolves_half_up() -> None:
     rng = random.Random(11)
     hits = sum(1 for _ in range(200_000) if _bernoulli(rng, Decimal("0.00005")))
     assert hits > 0, "a sub-basis-point rate was truncated to zero"
+
+
+# ===========================================================================
+# 5. The float exemption is narrow, and stays narrow (M5a)
+# ===========================================================================
+
+
+@pytest.mark.charter_guard
+def test_the_float_exemption_stays_narrow() -> None:
+    """An allow-list is only as good as the check that it did not grow.
+
+    Every exempt module must (a) exist, (b) actually need the exemption, and
+    (c) be invisible to the business result - not imported by types.py, and
+    holding no field of any type that ReconciliationResult transitively
+    contains. Without (c) the exemption is a hole in D6 rather than a
+    carve-out for telemetry.
+    """
+    assert len(FLOAT_ANNOTATION_EXEMPT) == 2, (
+        f"the float exemption has grown to {len(FLOAT_ANNOTATION_EXEMPT)}: "
+        f"{FLOAT_ANNOTATION_EXEMPT}. Adding a module here is a D6 decision."
+    )
+    types_source = (REPO_ROOT / "settlesense" / "types.py").read_text("utf-8")
+    for rel in FLOAT_ANNOTATION_EXEMPT:
+        path = REPO_ROOT / rel
+        assert path.exists(), f"exemption names a missing file: {rel}"
+        source = path.read_text("utf-8")
+        assert "float" in source, (
+            f"{rel} is exempted from the float-annotation scan but has no float "
+            "annotation. A dead exemption advertises a hole that is not there."
+        )
+        # types.py must not import an exempt module, in any import form.
+        module = rel.removesuffix(".py").replace("/", ".")
+        assert module not in types_source, (
+            f"settlesense/types.py references {module} - the business result "
+            "must not be able to reach a module permitted to hold floats (S3)."
+        )
+    print(
+        f"\n  float exemption: {len(FLOAT_ANNOTATION_EXEMPT)} modules, neither reachable "
+        f"from types.py"
+    )
+
+
+@pytest.mark.charter_guard
+def test_the_exempt_modules_are_still_scanned_for_float_literals() -> None:
+    """FAULT INJECTION. The exemption covers ANNOTATIONS ONLY.
+
+    Two distinct scans exist and only one has an allow-list. This proves the
+    other still fires inside an exempt file - checked by feeding the literal
+    scanner the exempt module's real source with one literal spliced in, so a
+    future refactor that accidentally routes literals through the allow-list
+    is caught.
+    """
+    for rel in FLOAT_ANNOTATION_EXEMPT:
+        source = (REPO_ROOT / rel).read_text("utf-8")
+        assert not _float_literals(ast.parse(source)), (
+            f"{rel} contains a float literal today - the exemption is for annotations, not literals"
+        )
+        guilty = ast.parse(source + "\n_SPLICED = 0.5\n")
+        offenders = _float_literals(guilty)
+        assert offenders, f"the literal scanner did not fire inside {rel}"
+    print(
+        f"\n  literal scan still applies inside all {len(FLOAT_ANNOTATION_EXEMPT)} exempt modules"
+    )

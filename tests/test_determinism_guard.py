@@ -162,6 +162,21 @@ _WALL_CLOCK_PAIRS: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+# THE ONE FILE PERMITTED A CLOCK, and only perf_counter (SDD 8.1, M5a).
+#
+# By PATH, not by call site, so the exemption cannot spread by someone adding an
+# inline suppression comment to a new module. perf_counter is exempted here alone;
+# `time.time()` and `datetime.now()` in this same file are STILL violations,
+# because the distinction that matters is not "is it a clock" but "can a RESULT
+# depend on it". perf_counter has no epoch, cannot be formatted as a date, and
+# nothing derived from it enters ReconciliationResult - it can only answer how
+# long something took.
+#
+# Both halves are fault-injected: a non-exempt file using perf_counter must
+# fire, and the exempt file using time.time() must also fire. An exemption that
+# was never shown to be narrow is just a hole.
+_PERF_COUNTER_EXEMPT: frozenset[Path] = frozenset({SETTLESENSE / "core" / "telemetry.py"})
+
 # Top-level functions of the `random` module: these use the shared global
 # instance rather than an explicitly seeded random.Random(seed).
 _RANDOM_GLOBALS: frozenset[str] = frozenset(
@@ -185,9 +200,15 @@ def check_wall_clock(paths: Iterator[Path]) -> list[Violation]:
     violations: list[Violation] = []
     for path in paths:
         tree = _parse(path)
+        exempt_perf_counter = path.resolve() in {p.resolve() for p in _PERF_COUNTER_EXEMPT}
         for node, resolved in _calls(tree):
             segments = resolved.split(".")
-            if len(segments) >= 2 and (segments[-2], segments[-1]) in _WALL_CLOCK_PAIRS:
+            if len(segments) < 2:
+                continue
+            pair = (segments[-2], segments[-1])
+            if pair == ("time", "perf_counter") and exempt_perf_counter:
+                continue
+            if pair in _WALL_CLOCK_PAIRS:
                 violations.append(
                     Violation(
                         path,
@@ -422,6 +443,80 @@ def test_no_wall_clock_detects_a_violation(tmp_path: Path) -> None:
     assert "time.time()" in violations[2].detail
     # The alias `dt` must not defeat the guard.
     assert "utcnow" in violations[3].detail
+
+
+# ---------------------------------------------------------------------------
+# 9a. The perf_counter exemption is ONE FILE WIDE (M5a, SDD 8.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.charter_guard
+def test_the_perf_counter_exemption_names_exactly_one_real_file() -> None:
+    """An exemption list is a liability. It gets counted and checked.
+
+    Two failure modes, both silent: the list grows a second entry nobody
+    reviewed, or it names a file that no longer exists - at which point it
+    exempts nothing and reads as though it does.
+    """
+    assert len(_PERF_COUNTER_EXEMPT) == 1, (
+        f"the clock exemption has grown to {len(_PERF_COUNTER_EXEMPT)} files: "
+        f"{sorted(str(p) for p in _PERF_COUNTER_EXEMPT)}"
+    )
+    (exempt,) = _PERF_COUNTER_EXEMPT
+    assert exempt.exists(), f"exemption names a file that does not exist: {exempt}"
+    source = exempt.read_text(encoding="utf-8")
+    assert "perf_counter" in source, (
+        f"{exempt.name} is exempted from the clock guard but does not read a clock. "
+        "A dead exemption is worse than none - it advertises a hole that is not there."
+    )
+    print(f"\n  clock exemption: {exempt.relative_to(SETTLESENSE.parent)} (perf_counter only)")
+
+
+@pytest.mark.charter_guard
+def test_perf_counter_is_still_a_violation_outside_the_exempt_file(tmp_path: Path) -> None:
+    """FAULT INJECTION, direction 1: any other module timing itself must fire."""
+    sample = tmp_path / "not_telemetry.py"
+    sample.write_text(
+        "import time\n\ndef go():\n    return time.perf_counter()\n", encoding="utf-8"
+    )
+    violations = check_wall_clock(iter([sample]))
+    assert [v.lineno for v in violations] == [4], [str(v) for v in violations]
+    assert "perf_counter" in violations[0].detail
+    print(f"\n  non-exempt perf_counter caught: {violations[0].detail[:60]}")
+
+
+@pytest.mark.charter_guard
+def test_an_exempt_file_may_not_read_a_wall_clock_either(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAULT INJECTION, direction 2: the exemption covers perf_counter ALONE.
+
+    A temp file is added to the exemption set rather than the real telemetry
+    module being overwritten - a test that rewrites repository source is one
+    SIGKILL away from leaving the tree broken, and the logic under test is the
+    same either way.
+    """
+    stand_in = tmp_path / "telemetry.py"
+    stand_in.write_text(
+        "import time\nfrom datetime import date\n\n"
+        "def a():\n    return time.perf_counter()\n"
+        "def b():\n    return time.time()\n"
+        "def c():\n    return date.today()\n",
+        encoding="utf-8",
+    )
+    # check_wall_clock looks the exemption up as a module global at call time,
+    # so patching it here is what the real code path will read.
+    monkeypatch.setattr(
+        sys.modules[__name__], "_PERF_COUNTER_EXEMPT", frozenset({stand_in}), raising=True
+    )
+    violations = check_wall_clock(iter([stand_in]))
+
+    details = [v.detail for v in violations]
+    assert len(violations) == 2, f"expected time.time() and date.today() only, got {details}"
+    assert not any("perf_counter" in detail for detail in details), details
+    assert any("time.time()" in detail for detail in details), details
+    assert any("date.today()" in detail for detail in details), details
+    print(f"\n  exempt path still refused time.time() and date.today(): {len(violations)} caught")
 
 
 # ===========================================================================

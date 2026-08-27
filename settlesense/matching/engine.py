@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from settlesense.config import AppConfig
-from settlesense.core.telemetry import RunTelemetry
+from settlesense.core.telemetry import RunTelemetry, StageTimer, StageTiming
 from settlesense.exceptions.taxonomy import DEDUCTION_CATEGORIES, VarianceCategory
 from settlesense.ingest import DayDataset, canonical_sort_key
 from settlesense.matching.arithmetic import (
@@ -501,6 +501,7 @@ def _classify_batches(
     calendar: WorkingDayCalendar,
     rounding_tolerance: Money,
     as_of: date,
+    timings: list[StageTiming] | None = None,
 ) -> tuple[tuple[BatchLinkOutcome, ...], tuple[str, ...], tuple[FuzzyVerdict, ...]]:
     """Batch grain in strict pass order: P2, P2b, P8, then P9 categorisation.
 
@@ -518,85 +519,102 @@ def _classify_batches(
     CATEGORISATION of a difference on an already-linked batch, and it runs last
     over links from both P2b and P8. Calling P2b "P9" made the pass order look
     inverted when it was not.
+
+    `timings` is an OPTIONAL collector (M5a). When None - which is every
+    production call - not one perf_counter is read, so instrumentation cannot
+    land on the hot path by accident. It never influences a decision: the same
+    dataset produces a byte-identical result with the collector present or
+    absent, and a test asserts exactly that.
     """
-    profiles = _batch_profiles(dataset, config)
-    due_dates = {
-        batch.batch_id: bank_value_due_date(
-            batch.settled_event_date, profiles[batch.batch_id], calendar
+    batch_count = len(dataset.settlement_batches)
+    # Profile derivation is its OWN stage, not part of P2. It walks every
+    # settlement line to recover each batch's merchant profile, so its cost
+    # scales with ROW COUNT while P2 proper scales with batch count. Folding
+    # the two together billed O(rows) work to a 39-row denominator and made P2
+    # read as the slowest stage per record in the whole pipeline, which is an
+    # artifact of the denominator rather than anything about matching.
+    with StageTimer(timings, "batch profile derivation", len(dataset.settlement_lines)) as timer:
+        profiles = _batch_profiles(dataset, config)
+        timer.records_out = len(profiles)
+    with StageTimer(timings, "P2 exact batch<->bank", batch_count):
+        due_dates = {
+            batch.batch_id: bank_value_due_date(
+                batch.settled_event_date, profiles[batch.batch_id], calendar
+            )
+            for batch in dataset.settlement_batches
+            if batch.batch_id in profiles
+        }
+        links, unclaimed = link_batches_to_bank(
+            dataset.settlement_batches,
+            dataset.bank_rows,
+            calendar,
+            due_dates,
+            BANK_WINDOW_DAYS,
+            as_of,
         )
-        for batch in dataset.settlement_batches
-        if batch.batch_id in profiles
-    }
-    links, unclaimed = link_batches_to_bank(
-        dataset.settlement_batches,
-        dataset.bank_rows,
-        calendar,
-        due_dates,
-        BANK_WINDOW_DAYS,
-        as_of,
-    )
     remaining = {row.bank_txn_id: row for row in unclaimed}
     batches = {batch.batch_id: batch for batch in dataset.settlement_batches}
     outcomes: dict[str, BatchLinkOutcome] = {}
     still_open: list[str] = []
 
     # --- P2 exact, then P2b: full UTR present, amount within tolerance ------
-    for link in sorted(links, key=lambda link: link.batch_id):
-        batch = batches[link.batch_id]
-        if link.is_linked:
-            outcomes[link.batch_id] = BatchLinkOutcome(
-                batch_id=link.batch_id,
-                status=ExceptionStatus.CONFIRMED,
-                bank_row_id=link.bank_txn_id,
-                batch_net_total=link.batch_net_total,
-                linked_amount=link.linked_amount,
-                variance=ZERO,
-                category=None,
-                resolved_by=ResolutionSource.DETERMINISTIC,
-                confidence=None,
-            )
-            continue
+    with StageTimer(timings, "P2b full-UTR within tolerance", len(links)):
+        for link in sorted(links, key=lambda link: link.batch_id):
+            batch = batches[link.batch_id]
+            if link.is_linked:
+                outcomes[link.batch_id] = BatchLinkOutcome(
+                    batch_id=link.batch_id,
+                    status=ExceptionStatus.CONFIRMED,
+                    bank_row_id=link.bank_txn_id,
+                    batch_net_total=link.batch_net_total,
+                    linked_amount=link.linked_amount,
+                    variance=ZERO,
+                    category=None,
+                    resolved_by=ResolutionSource.DETERMINISTIC,
+                    confidence=None,
+                )
+                continue
 
-        target = normalize_utr(batch.utr)
-        near = sorted(
-            (
-                row
-                for row in remaining.values()
-                if target in normalize_utr(row.narration)
-                and abs(row.amount - batch.net_total) <= rounding_tolerance
-            ),
-            key=lambda row: row.bank_txn_id,
-        )
-        if near:
-            row = near[0]
-            del remaining[row.bank_txn_id]
-            outcomes[link.batch_id] = BatchLinkOutcome(
-                batch_id=link.batch_id,
-                status=ExceptionStatus.CONFIRMED,
-                bank_row_id=row.bank_txn_id,
-                batch_net_total=batch.net_total,
-                linked_amount=row.amount,
-                variance=money(batch.net_total - row.amount),
-                category=_p9_rounding_category(batch.net_total, row.amount, rounding_tolerance),
-                resolved_by=ResolutionSource.DETERMINISTIC,
-                confidence=None,
+            target = normalize_utr(batch.utr)
+            near = sorted(
+                (
+                    row
+                    for row in remaining.values()
+                    if target in normalize_utr(row.narration)
+                    and abs(row.amount - batch.net_total) <= rounding_tolerance
+                ),
+                key=lambda row: row.bank_txn_id,
             )
-            continue
+            if near:
+                row = near[0]
+                del remaining[row.bank_txn_id]
+                outcomes[link.batch_id] = BatchLinkOutcome(
+                    batch_id=link.batch_id,
+                    status=ExceptionStatus.CONFIRMED,
+                    bank_row_id=row.bank_txn_id,
+                    batch_net_total=batch.net_total,
+                    linked_amount=row.amount,
+                    variance=money(batch.net_total - row.amount),
+                    category=_p9_rounding_category(batch.net_total, row.amount, rounding_tolerance),
+                    resolved_by=ResolutionSource.DETERMINISTIC,
+                    confidence=None,
+                )
+                continue
 
-        if due_dates.get(link.batch_id, batch.settled_event_date) > as_of:
-            outcomes[link.batch_id] = BatchLinkOutcome(
-                batch_id=link.batch_id,
-                status=ExceptionStatus.PENDING_EVIDENCE,
-                bank_row_id=None,
-                batch_net_total=batch.net_total,
-                linked_amount=None,
-                variance=None,
-                category=None,  # nothing is wrong yet; the file has not arrived
-                resolved_by=None,
-                confidence=None,
-            )
-            continue
-        still_open.append(link.batch_id)
+            if due_dates.get(link.batch_id, batch.settled_event_date) > as_of:
+                outcomes[link.batch_id] = BatchLinkOutcome(
+                    batch_id=link.batch_id,
+                    status=ExceptionStatus.PENDING_EVIDENCE,
+                    bank_row_id=None,
+                    batch_net_total=batch.net_total,
+                    linked_amount=None,
+                    variance=None,
+                    category=None,  # nothing is wrong yet; the file has not arrived
+                    resolved_by=None,
+                    confidence=None,
+                )
+                continue
+            still_open.append(link.batch_id)
 
     # --- P8 FUZZY UTR (M4) --------------------------------------------------
     # Every surviving credit is scored against every still-open batch, so a
@@ -605,71 +623,76 @@ def _classify_batches(
     # leaves the candidate pool, so the result cannot depend on dict order.
     verdicts: list[FuzzyVerdict] = []
     open_batches = {batch_id: batches[batch_id] for batch_id in still_open}
-    for txn_id in sorted(remaining):
-        if not open_batches:
-            break
-        verdict = fuzzy_resolve(
-            remaining[txn_id],
-            sorted(open_batches.values(), key=lambda b: b.batch_id),
-            due_dates,
-            config,
-        )
-        verdicts.append(verdict)
-        if not verdict.is_accepted or verdict.matched_batch_id is None:
-            continue
-        batch = open_batches.pop(verdict.matched_batch_id)
-        row = remaining.pop(txn_id)
-        outcomes[batch.batch_id] = BatchLinkOutcome(
-            batch_id=batch.batch_id,
-            status=ExceptionStatus.CONFIRMED,
-            bank_row_id=row.bank_txn_id,
-            batch_net_total=batch.net_total,
-            linked_amount=row.amount,
-            variance=money(batch.net_total - row.amount),
-            category=(
-                str(VarianceCategory.ROUNDING_DIFFERENCE) if row.amount != batch.net_total else None
-            ),
-            resolved_by=ResolutionSource.DETERMINISTIC,
-            confidence=None,
-        )
+    with StageTimer(timings, "P8 fuzzy UTR", len(remaining)):
+        for txn_id in sorted(remaining):
+            if not open_batches:
+                break
+            verdict = fuzzy_resolve(
+                remaining[txn_id],
+                sorted(open_batches.values(), key=lambda b: b.batch_id),
+                due_dates,
+                config,
+            )
+            verdicts.append(verdict)
+            if not verdict.is_accepted or verdict.matched_batch_id is None:
+                continue
+            batch = open_batches.pop(verdict.matched_batch_id)
+            row = remaining.pop(txn_id)
+            outcomes[batch.batch_id] = BatchLinkOutcome(
+                batch_id=batch.batch_id,
+                status=ExceptionStatus.CONFIRMED,
+                bank_row_id=row.bank_txn_id,
+                batch_net_total=batch.net_total,
+                linked_amount=row.amount,
+                variance=money(batch.net_total - row.amount),
+                category=(
+                    str(VarianceCategory.ROUNDING_DIFFERENCE)
+                    if row.amount != batch.net_total
+                    else None
+                ),
+                resolved_by=ResolutionSource.DETERMINISTIC,
+                confidence=None,
+            )
 
     # --- Whatever P8 could not resolve --------------------------------------
     # The category comes from the FUZZY VERDICT where one exists, because the
     # verdict knows which path scored it. Path A failing means a UTR was there
     # and could not be mapped; Path B failing means there was none to map.
-    for batch_id in sorted(open_batches):
-        batch = open_batches[batch_id]
-        # CLASSIFIED ON EVIDENCE, not on which path happened to score it.
-        # A first version took the category straight from the fuzzy verdict,
-        # which reports UTR_MISSING_MAPPING for any Path B failure - so the two
-        # batches whose credit never arrived at all were filed as UTR-mapping
-        # problems. "We cannot find which credit this is" and "there is no
-        # credit" are different findings with different fixes, and only the
-        # evidence separates them.
-        prefix_seen = any(
-            _shares_utr_prefix(normalize_utr(batch.utr), row.narration)
-            for row in remaining.values()
-        )
-        amount_seen = any(
-            abs(row.amount - batch.net_total) <= rounding_tolerance for row in remaining.values()
-        )
-        if prefix_seen:
-            category = VarianceCategory.UTR_TRUNCATED_MAPPING
-        elif amount_seen:
-            category = VarianceCategory.UTR_MISSING_MAPPING
-        else:
-            category = VarianceCategory.MISSING_VS_LATE_CREDIT
-        outcomes[batch_id] = BatchLinkOutcome(
-            batch_id=batch_id,
-            status=ExceptionStatus.OPEN,
-            bank_row_id=None,
-            batch_net_total=batch.net_total,
-            linked_amount=None,
-            variance=None,
-            category=str(category),
-            resolved_by=None,
-            confidence=None,
-        )
+    with StageTimer(timings, "unresolved batch categorisation", len(open_batches)):
+        for batch_id in sorted(open_batches):
+            batch = open_batches[batch_id]
+            # CLASSIFIED ON EVIDENCE, not on which path happened to score it.
+            # A first version took the category straight from the fuzzy verdict,
+            # which reports UTR_MISSING_MAPPING for any Path B failure - so the two
+            # batches whose credit never arrived at all were filed as UTR-mapping
+            # problems. "We cannot find which credit this is" and "there is no
+            # credit" are different findings with different fixes, and only the
+            # evidence separates them.
+            prefix_seen = any(
+                _shares_utr_prefix(normalize_utr(batch.utr), row.narration)
+                for row in remaining.values()
+            )
+            amount_seen = any(
+                abs(row.amount - batch.net_total) <= rounding_tolerance
+                for row in remaining.values()
+            )
+            if prefix_seen:
+                category = VarianceCategory.UTR_TRUNCATED_MAPPING
+            elif amount_seen:
+                category = VarianceCategory.UTR_MISSING_MAPPING
+            else:
+                category = VarianceCategory.MISSING_VS_LATE_CREDIT
+            outcomes[batch_id] = BatchLinkOutcome(
+                batch_id=batch_id,
+                status=ExceptionStatus.OPEN,
+                bank_row_id=None,
+                batch_net_total=batch.net_total,
+                linked_amount=None,
+                variance=None,
+                category=str(category),
+                resolved_by=None,
+                confidence=None,
+            )
 
     orphans = tuple(
         sorted(
@@ -718,60 +741,88 @@ def run(dataset: DayDataset, config: AppConfig, as_of: date) -> ReconciliationRe
 
 
 def run_with_telemetry(
-    dataset: DayDataset, config: AppConfig, as_of: date
+    dataset: DayDataset, config: AppConfig, as_of: date, collect_timings: bool = False
 ) -> tuple[ReconciliationResult, RunTelemetry]:
-    """Two return values (SDD 8.1). Callers that persist or compare take [0]."""
+    """Two return values (SDD 8.1). Callers that persist or compare take [0].
+
+    `collect_timings=False` is the DEFAULT, and with it no clock is read
+    anywhere in this call. Instrumentation is opt-in because a benchmark
+    harness is the only caller that wants it, and a timing side-effect on the
+    path every other caller takes is how "measuring it changed it" starts.
+
+    Timing cannot change a decision: `timings` is write-only from the engine's
+    point of view, nothing reads it back, and `test_m5a_bench.py` asserts the
+    serialized result is byte-identical with instrumentation on and off.
+    """
+    timings: list[StageTiming] | None = [] if collect_timings else None
     calendar = WorkingDayCalendar(config.calendar)
     tolerance = config.thresholds.tolerance.rounding_rupees
+    ledger_count = len(dataset.ledger_rows)
 
     # --- Population C part 1: P7a, and P7b's pairing for the case pass ------
-    confirmed = find_confirmed_duplicates(dataset.ledger_rows)
+    with StageTimer(timings, "P7a duplicates confirmed", ledger_count) as timer:
+        confirmed = find_confirmed_duplicates(dataset.ledger_rows)
+        timer.records_out = len(confirmed)
     confirmed_ids = frozenset(row_id for verdict in confirmed for row_id in verdict.row_ids)
-    candidates = find_candidate_duplicates(dataset.ledger_rows, confirmed_ids)
+    with StageTimer(timings, "P7b duplicate pairing", ledger_count) as timer:
+        candidates = find_candidate_duplicates(dataset.ledger_rows, confirmed_ids)
+        timer.records_out = len(candidates)
     candidate_order_ids = frozenset(
         order_id for verdict in candidates for order_id in verdict.row_ids
     )
 
     # --- Population A -------------------------------------------------------
-    facts = build_cases(dataset, config)
-    cases = tuple(
-        sorted(
-            (
-                _classify_case(fact, calendar, candidate_order_ids, tolerance, as_of)
-                for fact in facts
-            ),
-            key=lambda outcome: outcome.case_id,
+    with StageTimer(timings, "P1 build cases", len(dataset.payment_rows)) as timer:
+        facts = build_cases(dataset, config)
+        timer.records_out = len(facts)
+    # P3, P4, P6, P7b-apply and P9-rounding are FUSED in _classify_case: one
+    # walk over the facts decides all five for a case. They are reported as one
+    # stage because that is what the code is - splitting them would mean
+    # restructuring the hot loop so a report could have more rows, which is the
+    # tail wagging the dog. The batch-grain passes below ARE separate phases
+    # and are timed separately.
+    with StageTimer(timings, "P3/P4/P6/P7b/P9 case classification", len(facts)) as timer:
+        cases = tuple(
+            sorted(
+                (
+                    _classify_case(fact, calendar, candidate_order_ids, tolerance, as_of)
+                    for fact in facts
+                ),
+                key=lambda outcome: outcome.case_id,
+            )
         )
-    )
+        timer.records_out = len(cases)
 
     # --- Population B -------------------------------------------------------
     batch_links, orphan_bank_ids, _verdicts = _classify_batches(
-        dataset, config, calendar, tolerance, as_of
+        dataset, config, calendar, tolerance, as_of, timings
     )
 
     # --- Population C part 2: orphan credits --------------------------------
-    bank_by_id = {row.bank_txn_id: row for row in dataset.bank_rows}
-    row_variances: list[RowVarianceOutcome] = [
-        RowVarianceOutcome(
-            row_id=verdict.row_ids[0] if verdict.row_ids else "",
-            source_table="ledger_rows",
-            status=ExceptionStatus.CONFIRMED,
-            category=str(VarianceCategory.DUPLICATE_CONFIRMED),
-            amount=verdict.amount,
+    with StageTimer(timings, "row-grain variance assembly", len(dataset.bank_rows)) as timer:
+        bank_by_id = {row.bank_txn_id: row for row in dataset.bank_rows}
+        row_variances: list[RowVarianceOutcome] = [
+            RowVarianceOutcome(
+                row_id=verdict.row_ids[0] if verdict.row_ids else "",
+                source_table="ledger_rows",
+                status=ExceptionStatus.CONFIRMED,
+                category=str(VarianceCategory.DUPLICATE_CONFIRMED),
+                amount=verdict.amount,
+            )
+            for verdict in confirmed
+        ]
+        row_variances.extend(
+            RowVarianceOutcome(
+                row_id=txn_id,
+                source_table="bank_rows",
+                status=ExceptionStatus.OPEN,
+                category=str(VarianceCategory.UNEXPLAINED),
+                amount=bank_by_id[txn_id].amount,
+            )
+            for txn_id in orphan_bank_ids
+            if txn_id in bank_by_id
         )
-        for verdict in confirmed
-    ]
-    row_variances.extend(
-        RowVarianceOutcome(
-            row_id=txn_id,
-            source_table="bank_rows",
-            status=ExceptionStatus.OPEN,
-            category=str(VarianceCategory.UNEXPLAINED),
-            amount=bank_by_id[txn_id].amount,
-        )
-        for txn_id in orphan_bank_ids
-        if txn_id in bank_by_id
-    )
+        timer.records_out = len(row_variances)
 
     result = ReconciliationResult(
         cases=cases,
@@ -783,7 +834,10 @@ def run_with_telemetry(
         calendar_version=config.calendar.version,
         config_hash=config.config_hash,
     )
-    return result, RunTelemetry()
+    # peak_rss_bytes stays 0 here: this function does not own a tracemalloc
+    # session, and reporting a figure it did not measure would be worse than
+    # reporting none. eval/bench.py measures peak memory around the whole call.
+    return result, RunTelemetry(timings=tuple(timings or ()))
 
 
 def fuzzy_verdicts_for(

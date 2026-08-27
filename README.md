@@ -68,6 +68,47 @@ that is one run on one dataset and is reported, not concluded.
 separately: 4,974 deterministic resolutions × 4 min = 19,896 min. The AI layer
 has resolved 0. The two are never added.
 
+### Throughput — dev seed (`make bench`)
+
+`arm · 8 cores · 8 GiB · Python 3.14.7 · macOS-26.6-arm64`
+
+Median of 3 repetitions, **never the best run**. No model calls. Full table in
+[`reports/bench.md`](reports/bench.md).
+
+| Records | Cases | Input rows | Pipeline (s) | Cases/s | Peak MiB |
+|---:|---:|---:|---:|---:|---:|
+| 500 | 502 | 1,626 | 0.041 | **12,341** | 1.8 |
+| 5,000 | 5,026 | 15,779 | 0.326 | **15,405** | 19.4 |
+| 25,000 | 25,123 | 78,594 | 1.944 | **12,925** | 94.9 |
+| 100,000 | 100,506 | 313,869 | 8.530 | **11,783** | 379.7 |
+
+Pipeline = ingest + engine; dataset generation is excluded from the timed
+region and reported separately. 100k was **attempted and measured** because 25k
+finished inside the two-minute budget that gates it — a skipped row would have
+been absent, never extrapolated.
+
+**The residual share is the architectural argument.** The deterministic layer
+carries the volume; the expensive stage is sized by ambiguity, not by rows:
+
+| Records | Cases | Deterministic residual | Residual share |
+|---:|---:|---:|---:|
+| 500 | 502 | 4 | 0.80% |
+| 5,000 | 5,026 | 52 | 1.03% |
+| 25,000 | 25,123 | 246 | 0.98% |
+| 100,000 | 100,506 | 1,012 | 1.01% |
+
+Roughly one case in a hundred reaches the AI stage, and that ratio holds across
+a 200-fold change in volume. **Seconds and rupees for that stage are not
+reported, because the stage does not exist yet** — M7 is unbuilt and
+`fixtures/llm/` holds zero recorded responses. A `0.000s` row would be
+indistinguishable from a stage that ran and cost nothing.
+
+Telemetry is a **separate return value** from the business result, not a field
+inside it (SDD 8.1). `ReconciliationResult` contains no float, no duration and
+no timestamp anywhere in its transitive type graph, so a golden comparator has
+nothing to strip — and a test asserts the serialized result is byte-identical
+with instrumentation on and off.
+
 ### Held-out set — seed 999 (`make eval-holdout`)
 
 **NOT YET RUN.** Reserved for a single run at the end, after M7. Whatever it

@@ -833,9 +833,14 @@ def _readme_dev_section(readme: str) -> str:
 
     Bounded deliberately: a number found anywhere in a 200-line README proves
     nothing about the table it was supposed to be in.
+
+    Ends at the Throughput section, which M5a added between here and the
+    holdout block. Those figures come from reports/bench.md and are checked by
+    tests/test_m5a_bench.py against THAT artifact - letting them sit inside
+    this range would mean a bench number could satisfy an eval expectation.
     """
     start = readme.index("### Dev set")
-    end = readme.index("### Held-out set")
+    end = readme.index("### Throughput")
     return readme[start:end]
 
 

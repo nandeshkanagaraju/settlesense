@@ -152,9 +152,18 @@ eval-holdout:
 eval-ai:
 	$(PYTHON) -m eval.run_eval_ai --eval-dir data/eval --out reports/eval-ai
 
+# Throughput scaling (M5a). THE DEV SEED, never the holdout: a benchmark is
+# re-run on every change, and a held-out set run dozens of times is no longer
+# held out. Nothing about a throughput figure needs unseen data.
+#
+# Sizes are 500/5000/25000 rather than SDD 8's 500/5000/25000/100000. 100k is
+# ATTEMPTED as a stretch when 25k finishes inside two minutes, and reports/bench.md
+# states which branch was taken - a skipped 100k row is absent, never estimated
+# from the smaller sizes.
+BENCH_SIZES ?= 500,5000,25000
+
 bench:
-	$(call notimpl,bench,Gate 4 / M5a,eval/bench.py)
-	$(PYTHON) -m eval.bench --sizes 500,5000,25000,100000 --out reports/bench.md
+	$(PYTHON) -m eval.bench --sizes $(BENCH_SIZES) --out reports/bench.md
 
 # --- interface --------------------------------------------------------------
 
