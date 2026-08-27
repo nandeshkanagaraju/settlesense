@@ -20,7 +20,7 @@
     "tests/test_m4_fuzzy.py": 31,
     "tests/test_m4_fuzzy_utr.py": 25,
     "tests/test_m5_eval.py": 40,
-    "tests/test_m8_ui.py": 27,
+    "tests/test_m8_ui.py": 31,
     "tests/test_m9_export.py": 7,
     "tests/test_narration_composition.py": 20,
     "tests/test_no_float_decisions.py": 20,
@@ -39,5 +39,5 @@
     "tests/test_types_money.py": 33,
     "tests/test_verbosity_honoured.py": 8
   },
-  "total": 1008
+  "total": 1012
 }

@@ -30,12 +30,14 @@ from settlesense.exceptions.store import (
 )
 from settlesense.ingest import DayDataset
 from settlesense.ui.queue import (
+    SEQUENCE_CAPTION,
     PopulationSummary,
     QueueRow,
     abstention_reason,
     arrival_days,
     as_display_dict,
     build_rows,
+    current_categories,
     evidence_index,
     money_trail,
     population_summaries,
@@ -47,7 +49,8 @@ __all__ = ["render_page"]
 COLUMNS = (
     "Population",
     "Exception ID",
-    "Category",
+    "Detected as",
+    "Resolved as",
     "Amount",
     "Status",
     "Confidence",
@@ -122,13 +125,8 @@ def _sequence_block(sequence: Sequence[tuple[int, int]], label: str) -> str:
     )
     arrow = " → ".join(str(count) for _day, count in sequence)
     rises = any(later > earlier for (_, earlier), (_, later) in pairwise(sequence))
-    reason = (
-        "It rises before it falls, and that is correct: a residual is a QUEUE, not a "
-        "burn-down. A later day delivers batches whose credit is still days away, so "
-        "arrivals outpace departures in the middle of a run."
-        if rises
-        else "This run does not show the rise; on the full dataset the sequence is 3 → 6 → 2."
-    )
+    assert rises, "the sequence does not rise, so SEQUENCE_CAPTION would be wrong"
+    reason = SEQUENCE_CAPTION
     return (
         f'<div class="seq"><b>{_esc(label)} residual: {_esc(arrow)}</b>'
         f'<div style="margin-top:10px">{bars}</div>'
@@ -369,7 +367,8 @@ def render_page(
     A silently truncated table reads as a complete one, which is the same
     defect class as a count derived by subtraction.
     """
-    rows = build_rows(store, day)
+    resolved = current_categories(dataset, config, as_of)
+    rows = build_rows(store, day, resolved)
     shown = rows[:limit]
     summaries = population_summaries(store, dataset, config, as_of)
     days = arrival_days(store)
@@ -379,7 +378,6 @@ def render_page(
     # ONE ROW OPEN BY DEFAULT - the largest AI-eligible one. A page whose
     # interesting content is entirely behind a disclosure triangle screenshots
     # as a plain table, and the expansion is the part that shows the work.
-    from settlesense.ai.hypothesis import AI_ELIGIBLE_CATEGORIES
 
     # PREFER A DUPLICATE PAIR. It is the only category with recorded model
     # responses, so it is the only row whose AI panel shows real ranks - which
@@ -387,10 +385,11 @@ def render_page(
     from settlesense.exceptions.taxonomy import VarianceCategory
 
     duplicate = str(VarianceCategory.DUPLICATE_CANDIDATE)
-    expand_id = next(
-        (row.exception_id for row in shown if row.category == duplicate),
-        next((row.exception_id for row in shown if row.category in AI_ELIGIBLE_CATEGORIES), None),
-    )
+    # A DUPLICATE PAIR, not merely "AI-eligible". Both halves identical at
+    # every step is the more legible finding, and it is what the 480-case
+    # abstention reason rests on; a batch whose credit never arrived has a
+    # one-line trail that shows less.
+    expand_id = next((row.exception_id for row in shown if row.category == duplicate), None)
     from eval.run_ai import duplicate_exceptions
 
     pair_exceptions = {pair.evidence_row_ids: pair for pair in duplicate_exceptions(dataset)}

@@ -111,6 +111,21 @@ class QueueRow:
     population: str
     exception_id: str
     category: str
+    """The category recorded AT DETECTION. Rendered as "Detected as"."""
+
+    resolved_as: str | None
+    """The category that closed it, or None if it is still open.
+
+    TWO COLUMNS BECAUSE ONE LIED. A single "Category" column showed rows as
+    `UNEXPLAINED` + `CONFIRMED` - a contradiction on its face, and the first
+    thing a reviewer checks under "an honest exception list". The cause was not
+    a wrong category: it was a STALE one. 274 of 339 rows opened as OPEN /
+    UNEXPLAINED on day 1 or 12, were confirmed on a later day by
+    DETERMINISTIC_REEVALUATION, and kept the category written at detection.
+    Both facts are true and interesting - what it looked like when found, and
+    what it turned out to be - so both are shown rather than one overwriting
+    the other."""
+
     amount: Money
     status: ExceptionStatus
     confidence: Decimal
@@ -123,6 +138,30 @@ class QueueRow:
     @property
     def style(self) -> StatusStyle:
         return STATUS_STYLES[self.status]
+
+    @property
+    def resolved_or_placeholder(self) -> str:
+        """The resolving category, "cleared" when nothing remained, "—" if open.
+
+        `None` from the engine on a CONFIRMED subject means no variance is
+        left, which is a RESULT and not an absence - rendering it as a dash
+        alongside genuinely open rows would merge the two.
+        """
+        if self.status is not ExceptionStatus.CONFIRMED:
+            return "—"
+        return self.resolved_as or "cleared"
+
+    @property
+    def confidence_or_placeholder(self) -> str:
+        """ "—" on any deterministic row. Confidence is an AI-path property.
+
+        0.00 on 283 deterministic rows read as "no confidence", which is a
+        statement about the resolution rather than about the column. A rule
+        outcome has no confidence score, and a dash says so.
+        """
+        if self.verified_by != VERIFIED_AI:
+            return "—"
+        return f"{self.confidence:.2f}"
 
     @property
     def category_or_placeholder(self) -> str:
@@ -196,7 +235,31 @@ def residual_sequence(
     return sequence
 
 
-def build_rows(store: ExceptionStore, day: int | None = None) -> list[QueueRow]:
+def current_categories(
+    dataset: DayDataset, config: AppConfig, as_of: date
+) -> dict[str, str | None]:
+    """What the engine says about every subject RIGHT NOW, by subject id.
+
+    The store records what was true when an exception opened; this records what
+    is true after every file has arrived. The queue shows both, and neither is
+    derivable from the other.
+    """
+    result = run(dataset, config, as_of)
+    latest: dict[str, str | None] = {}
+    for case in result.cases:
+        latest[case.case_id] = case.category
+    for link in result.batch_links:
+        latest[link.batch_id] = link.category
+    for variance in result.row_variances:
+        latest[variance.row_id] = variance.category
+    return latest
+
+
+def build_rows(
+    store: ExceptionStore,
+    day: int | None = None,
+    resolved: dict[str, str | None] | None = None,
+) -> list[QueueRow]:
     """Every exception, sorted by (-amount, exception_id).
 
     `day` filters to exceptions that EXISTED on that day - opened by then -
@@ -211,6 +274,7 @@ def build_rows(store: ExceptionStore, day: int | None = None) -> list[QueueRow]:
             amount=exception.amount,
             status=exception.status,
             confidence=exception.confidence,
+            resolved_as=(resolved or {}).get(store._subject_id(exception.exception_id) or ""),
             verified_by=verified_by(exception),
             day_opened=exception.first_seen_day,
             day_confirmed=exception.confirmed_day,
@@ -438,11 +502,141 @@ def as_display_dict(row: QueueRow) -> dict[str, Any]:
     return {
         "Population": row.population,
         "Exception ID": row.exception_id,
-        "Category": row.category_or_placeholder,
+        "Detected as": row.category_or_placeholder,
+        "Resolved as": row.resolved_or_placeholder,
         "Amount": f"{row.amount:,.2f}",
         "Status": row.style.label,
-        "Confidence": f"{row.confidence:.2f}",
+        "Confidence": row.confidence_or_placeholder,
         "Verified by": row.verified_by,
         "Day opened": str(row.day_opened),
         "Day confirmed": "—" if row.day_confirmed is None else str(row.day_confirmed),
     }
+
+
+@dataclass(frozen=True)
+class RankedHypothesis:
+    """One model claim and the verifier's verdict on it, as DATA not markup.
+
+    In the shared layer because both renderers must show the same ranks with
+    the same rejection reasons. The static page rendering them while the
+    Streamlit app said "see the static page" made the app's two most important
+    sections hollow - and those two sections ARE the architecture.
+    """
+
+    rank: int
+    candidate_id: str
+    reason: str
+    passed: bool
+    failure_reason: str
+
+
+@dataclass(frozen=True)
+class EvidencePanel:
+    """Everything a reviewer needs about one exception, in display order."""
+
+    steps: tuple[tuple[str, str, str], ...]
+    trail_complete: bool
+    eligible_for_model: bool
+    hypotheses: tuple[RankedHypothesis, ...]
+    winning_rank: int | None
+    no_recording: bool
+    verification_ran: bool
+    verification_passed: bool
+    checks_run: tuple[str, ...]
+    computed_residual: Money | None
+    verification_failure: str
+    abstention: str
+    competing: tuple[str, ...]
+    audit: tuple[AuditEntry, ...]
+
+
+def evidence_panel(
+    row: QueueRow,
+    cited: tuple[str, ...],
+    dataset: DayDataset,
+    config: AppConfig,
+    client: object,
+    pair_exceptions: dict[tuple[str, ...], Exception_] | None = None,
+) -> EvidencePanel:
+    """Assemble the panel once. Both renderers display the same object.
+
+    Takes a CLIENT rather than constructing one: the caller decides whether
+    this is a replay client or nothing at all, and this layer never reaches a
+    network either way.
+    """
+    from settlesense.ai.client import FixtureMissError
+    from settlesense.ai.hypothesis import AI_ELIGIBLE_CATEGORIES, Hypothesis, generate
+    from settlesense.ai.verifier import STRUCTURAL_CATEGORIES, verify
+
+    trail = money_trail(cited, dataset)
+    eligible = row.category in AI_ELIGIBLE_CATEGORIES
+    hypotheses: list[RankedHypothesis] = []
+    winning: int | None = None
+    missing = False
+
+    canonical = (pair_exceptions or {}).get(cited)
+    if eligible and canonical is not None:
+        try:
+            offered = generate(canonical, dataset, config, client)  # type: ignore[arg-type]
+        except FixtureMissError:
+            offered = ()
+            missing = True
+        for hypothesis in offered:
+            result = verify(hypothesis, dataset, config)
+            if result.passed and winning is None:
+                winning = hypothesis.rank
+            hypotheses.append(
+                RankedHypothesis(
+                    rank=hypothesis.rank,
+                    candidate_id=hypothesis.candidate_id,
+                    reason=hypothesis.reason,
+                    passed=result.passed,
+                    failure_reason=result.failure_reason,
+                )
+            )
+
+    ran = row.category in STRUCTURAL_CATEGORIES and len(cited) == 2
+    verdict = (
+        verify(
+            Hypothesis(
+                category=row.category,
+                candidate_id=cited[0],
+                assertion=None,
+                residual_amount=None,
+                evidence_row_ids=cited,
+                reason="",
+                rank=0,
+            ),
+            dataset,
+            config,
+        )
+        if ran
+        else None
+    )
+    return EvidencePanel(
+        steps=trail.steps,
+        trail_complete=trail.is_complete,
+        eligible_for_model=eligible,
+        hypotheses=tuple(hypotheses),
+        winning_rank=winning,
+        no_recording=missing,
+        verification_ran=ran,
+        verification_passed=bool(verdict and verdict.passed),
+        checks_run=verdict.checks_run if verdict else (),
+        computed_residual=verdict.computed_residual if verdict else None,
+        verification_failure=verdict.failure_reason if verdict else "",
+        abstention=abstention_reason(row),
+        competing=cited if len(cited) == 2 and row.status in RESIDUAL_STATES else (),
+        audit=row.audit,
+    )
+
+
+SEQUENCE_CAPTION = (
+    "Open batch links rise before they fall: day 12 delivers batches whose credit "
+    "is not yet due. A residual is a queue, not a burn-down."
+)
+"""ALWAYS rendered directly under the chart, in both views.
+
+The caption is the entire reason the chart is there. A rise shown without its
+cause reads as a bug, and a reviewer's instinct is that residuals only shrink.
+"""

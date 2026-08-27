@@ -74,12 +74,21 @@ Read-only over the state DB. Three populations in one table with the population
 named per row, sorted by amount, and a **Verified by** column that carries the
 whole thesis at a glance.
 
+**Two category columns, not one.** `Detected as` is the category at first
+sight; `Resolved as` is what closed it. A single column showed rows as
+`UNEXPLAINED` + `CONFIRMED`, which reads as a contradiction — the category was
+written at detection and never updated when a later day's file resolved it.
+274 of 339 rows are in that position. Both facts are true and worth keeping, so
+both are shown. Confidence renders as `—` on rule-resolved rows: it is a
+property of the AI path, and `0.00` read as "no confidence".
+
 ![Evidence queue](reports/ui/evidence-queue.png)
 
 **283 of 339 tracked exceptions say DETERMINISTIC.** The residual sequence
-**3 → 6 → 2** rises before it falls, and the page says why rather than leaving
-a reviewer to assume a bug: a residual is a queue, not a burn-down — day 12
-delivers batches whose credit is still days away.
+**3 → 6 → 2** rises before it falls, and the caption directly under the chart
+says why rather than leaving a reviewer to assume a bug: *open batch links rise
+before they fall — day 12 delivers batches whose credit is not yet due. A
+residual is a queue, not a burn-down.*
 
 Every row expands into the full evidence, in the order a reviewer needs it:
 
@@ -96,8 +105,9 @@ that 480 of 507 decisions share:
 > independently, and confirming it would be deferring to the model.
 
 Rendered by [`reports/ui/queue.html`](reports/ui/queue.html); `make ui` serves
-the same data through Streamlit. Both read one data layer, so the page and the
-app cannot disagree.
+the same data through Streamlit. Both views render sections 1–5 from one
+`EvidencePanel` and compute nothing themselves — neither may defer to the other,
+which is asserted rather than intended.
 
 ### Throughput — dev seed (`make bench`)
 

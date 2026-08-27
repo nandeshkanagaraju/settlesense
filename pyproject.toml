@@ -102,7 +102,7 @@ disallow_incomplete_defs = true
 no_implicit_optional = true
 
 [[tool.mypy.overrides]]
-module = ["Levenshtein.*", "streamlit.*", "yaml.*"]
+module = ["Levenshtein.*", "streamlit.*", "yaml.*", "altair.*", "pandas.*"]
 ignore_missing_imports = true
 
 # numpy is never imported by this project. It arrives transitively (streamlit,

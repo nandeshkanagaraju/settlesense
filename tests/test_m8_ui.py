@@ -18,6 +18,7 @@ the rise without explaining it would look like a bug.
 from __future__ import annotations
 
 import ast
+import collections
 import re
 from datetime import date
 from decimal import Decimal
@@ -35,6 +36,7 @@ from settlesense.ui.queue import (
     POPULATION_LABELS,
     STATUS_STYLES,
     arrival_days,
+    as_display_dict,
     build_rows,
     money_trail,
     open_store,
@@ -125,15 +127,40 @@ def test_the_queue_never_writes() -> None:
     separate is what makes this assertion possible: a UI that also populated
     its own store could not be checked this way.
     """
-    write_words = re.compile(r"\b(INSERT|UPDATE|DELETE|DROP|CREATE TABLE)\b", re.I)
+    # SQL IN STRING LITERALS, not words in prose. A word-based scan flagged
+    # app.py's docstring for the sentence "the choice was to fill them in or to
+    # DELETE the app" - the sixth time in this project a scanner has matched
+    # its own documentation. Docstrings are excluded and only string constants
+    # that also contain a table name are considered.
+    verbs = re.compile(r"\b(INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|DROP\s+TABLE)\b", re.I)
     offenders: list[str] = []
     for path in sorted(UI_DIR.rglob("*.py")):
         if path.name == "build_state.py" or "__pycache__" in path.parts:
             continue
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if write_words.search(line) and "noqa" not in line:
-                offenders.append(f"{path.name}:{number}: {line.strip()[:70]}")
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        docstrings = {
+            id(node.body[0].value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef)
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+        }
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and id(node) not in docstrings
+                and verbs.search(node.value)
+            ):
+                offenders.append(f"{path.name}:{node.lineno}: {node.value[:60]}")
     assert not offenders, offenders
+
+    planted = ast.parse('q = "UPDATE exceptions SET status = ?"')
+    assert any(
+        isinstance(n, ast.Constant) and isinstance(n.value, str) and verbs.search(n.value)
+        for n in ast.walk(planted)
+    ), "the SQL scan matches nothing"
 
     writer = (UI_DIR / "build_state.py").read_text(encoding="utf-8")
     assert "run_day" in writer, "the writer does not write, so the split proves nothing"
@@ -193,8 +220,10 @@ def test_16b_the_sequence_renders_with_its_explanation(
     """The rise WITH its reason. A rise shown without one reads as a bug."""
     page = render_page(store, dataset, config, AS_OF, limit=6)
     assert "3 → 6 → 2" in page, "the sequence is not stated in full"
-    assert "QUEUE, not a burn-down" in page, "the rise is shown but not explained"
-    assert "credit is still days away" in page, "the reason is not given"
+    from settlesense.ui.queue import SEQUENCE_CAPTION
+
+    assert SEQUENCE_CAPTION in page, "the rise is shown but not explained"
+    assert "not yet due" in page, "the reason is not given"
     print("\n  the page states the sequence and the reason for the rise")
 
 
@@ -224,11 +253,19 @@ def test_all_three_populations_appear_with_their_own_denominators(
 # ===========================================================================
 
 
-def test_the_columns_are_the_nine_the_brief_names_in_order() -> None:
+def test_the_columns_split_category_into_detected_and_resolved() -> None:
+    """TWO category columns, because one lied.
+
+    A single column showed rows as UNEXPLAINED + CONFIRMED, which reads as a
+    contradiction and is the first thing a reviewer checks under "an honest
+    exception list". The cause was a STALE category, not a wrong one - see
+    QueueRow.resolved_as.
+    """
     assert COLUMNS == (
         "Population",
         "Exception ID",
-        "Category",
+        "Detected as",
+        "Resolved as",
         "Amount",
         "Status",
         "Confidence",
@@ -663,3 +700,104 @@ def test_19_both_views_resolve_the_same_evidence(
         f"\n  {len(rows)} rows share one resolver; it rewrites the citation for "
         f"{len(changed)} of them"
     )
+
+
+def test_20_no_row_is_confirmed_while_carrying_only_unexplained(
+    store: ExceptionStore, dataset: Any, config: AppConfig
+) -> None:
+    """CONFIRMED + UNEXPLAINED must never be a row's whole story.
+
+    THE DIAGNOSIS, VERIFIED. 274 of 339 rows opened as OPEN / UNEXPLAINED on
+    day 1 or 12 and were confirmed on a later day by DETERMINISTIC_REEVALUATION
+    - the category was written at detection and never updated. They did NOT
+    open as PENDING_EVIDENCE, which was the initial guess.
+
+    The fix is not to overwrite the stale category: what it looked like when
+    found is true and worth keeping. It is to show the resolving category
+    beside it, so the pair reads as a history rather than a contradiction.
+    """
+    from settlesense.ui.queue import current_categories
+
+    resolved = current_categories(dataset, config, AS_OF)
+    rows = build_rows(store, resolved=resolved)
+    confirmed_unexplained = [
+        row
+        for row in rows
+        if row.status is ExceptionStatus.CONFIRMED and row.category == "UNEXPLAINED"
+    ]
+    assert confirmed_unexplained, (
+        "no row is CONFIRMED + UNEXPLAINED, so this guard is vacuous on this store"
+    )
+    for row in confirmed_unexplained:
+        assert row.resolved_or_placeholder != "—", (
+            f"{row.exception_id} is CONFIRMED and UNEXPLAINED with nothing in "
+            "'Resolved as' - the pair still reads as a contradiction"
+        )
+    outcomes = collections.Counter(row.resolved_or_placeholder for row in confirmed_unexplained)
+    print(
+        f"\n  {len(confirmed_unexplained)} CONFIRMED+UNEXPLAINED rows, all carrying a "
+        f"resolution: {dict(outcomes)}"
+    )
+
+
+def test_21_confidence_is_a_dash_on_deterministic_rows(store: ExceptionStore) -> None:
+    """0.00 on 283 rule-resolved rows read as "no confidence".
+
+    Confidence is a property of the AI path. A rule outcome has no score, and a
+    dash says so; a zero makes a claim about the resolution's quality.
+    """
+    rows = build_rows(store)
+    deterministic = [row for row in rows if row.verified_by == "DETERMINISTIC"]
+    assert deterministic, "no deterministic rows to check"
+    assert all(row.confidence_or_placeholder == "—" for row in deterministic), (
+        "a deterministic row still renders a numeric confidence"
+    )
+    rendered = {as_display_dict(row)["Confidence"] for row in rows}
+    assert rendered == {"—"}, f"unexpected confidence values rendered: {rendered}"
+    print(f"\n  {len(deterministic)} deterministic rows, all rendering '—'")
+
+
+def test_22_the_sequence_caption_is_the_shared_one_and_names_the_cause(
+    store: ExceptionStore, dataset: Any, config: AppConfig
+) -> None:
+    """One caption, both views, always under the chart.
+
+    The caption is the entire reason the chart is there. It lives in the shared
+    layer so the static page and the app cannot show the chart with different
+    explanations - or with none.
+    """
+    from settlesense.ui.queue import SEQUENCE_CAPTION
+
+    assert "queue, not a burn-down" in SEQUENCE_CAPTION
+    assert "not yet due" in SEQUENCE_CAPTION
+    page = render_page(store, dataset, config, AS_OF, limit=4)
+    assert SEQUENCE_CAPTION in page, "the static page does not render the shared caption"
+    app = (REPO / "settlesense" / "ui" / "app.py").read_text(encoding="utf-8")
+    assert "SEQUENCE_CAPTION" in app, "the app does not render the shared caption"
+    # THE CALL, not the word. The docstring explains why line_chart is not
+    # used and therefore contains the name - the fifth time in this project a
+    # scanner has matched its own documentation.
+    assert "st.line_chart(" not in app, (
+        "the app still calls line_chart, which auto-scaled the y-axis to -4 on a "
+        "count of open exceptions and labelled the x-axis 0/1/2"
+    )
+    assert "domain=[0, peak + 1]" in app, "the y-axis is not pinned at zero"
+    print("\n  one caption, rendered by both views; y-axis pinned at 0")
+
+
+def test_23_both_views_render_hypotheses_from_the_shared_panel() -> None:
+    """Neither view may say "see the other one".
+
+    Sections 2 and 3 ARE the architecture. An evidence panel that defers on
+    them is worse than not having one, and a renderer that computes its own
+    would be free to disagree.
+    """
+    app = (REPO / "settlesense" / "ui" / "app.py").read_text(encoding="utf-8")
+    render = (REPO / "settlesense" / "ui" / "render.py").read_text(encoding="utf-8")
+    for name, source in (("app.py", app), ("render.py", render)):
+        assert "see the static page" not in source, f"{name} defers instead of rendering"
+    assert "evidence_panel(" in app, "the app does not use the shared panel"
+    assert "panel.hypotheses" in app, "the app does not render ranked hypotheses"
+    assert "panel.checks_run" in app, "the app does not render the checks that ran"
+    assert "hypothesis.failure_reason" in app, "the app does not show why one was rejected"
+    print("\n  both views render sections 2 and 3 from EvidencePanel")
