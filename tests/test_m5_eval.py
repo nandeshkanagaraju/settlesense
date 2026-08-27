@@ -527,14 +527,17 @@ def test_12_llm_only_runs_against_the_replay_client_with_no_network(
             for row in chunk
         ]
         (tmp_path / f"{prompt_hash(build_prompt(chunk, batches))}.json").write_text(
-            json.dumps({"text": json.dumps(answers), "input_tokens": 100, "output_tokens": 50})
+            # The client protocol became `complete(prompt, schema) -> dict` at
+            # M7, so a fixture is {"prompt": ..., "response": {...}} rather than
+            # a text blob with usage attached.
+            json.dumps({"prompt": "recorded", "response": {"links": answers}})
         )
 
     client = ReplayLLMClient(fixture_dir=tmp_path)
     outcome = run_llm_only(dataset, config, AS_OF, client)
     print(
         f"\n  llm_only: prompts={outcome.prompts_sent} links={len(outcome.links)} "
-        f"parse_failures={outcome.parse_failures} input_tokens={outcome.input_tokens}"
+        f"parse_failures={outcome.parse_failures}"
     )
     assert outcome.prompts_sent == len(client.calls) > 0
     assert len(outcome.links) == len(credits)

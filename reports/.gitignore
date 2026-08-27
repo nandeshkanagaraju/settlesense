@@ -24,3 +24,10 @@ eval/*
 # three is for - so this file is evidence of a real run on a stated machine,
 # not a byte-stable artifact like results.json.
 !bench.md
+
+# The M7 loop result is committed for the same reason: the README quotes the
+# 27/507 ceiling and the adversarial zero, and a quoted number with no artifact
+# behind it is unfalsifiable. Deterministic - no model is involved.
+!ai/
+ai/*
+!ai/ai_loop.json

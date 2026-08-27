@@ -47,6 +47,7 @@ REGISTERED_READERS = frozenset(
         "eval/run_eval.py",
         "eval/run_eval_ai.py",
         "eval/bench.py",
+        "eval/run_ai.py",
         "settlesense/exceptions/store.py",
         "settlesense/ai/client.py",
     }
@@ -199,10 +200,10 @@ def _run_eval_ai_empty(tmp: Path) -> str:
 
 def _replay_missing(tmp: Path) -> str:
     """No fixture recorded for this prompt."""
-    from settlesense.ai.client import ReplayLLMClient, ReplayMissError
+    from settlesense.ai.client import FixtureMissError, ReplayLLMClient
 
-    with pytest.raises(ReplayMissError) as caught:
-        ReplayLLMClient(fixture_dir=tmp / "absent").complete("unrecorded")
+    with pytest.raises(FixtureMissError) as caught:
+        ReplayLLMClient(fixture_dir=tmp / "absent").complete("unrecorded", {})
     return str(caught.value)
 
 
@@ -216,7 +217,7 @@ def _replay_empty(tmp: Path) -> str:
 
     (tmp / f"{prompt_hash('unrecorded')}.json").write_text("", encoding="utf-8")
     with pytest.raises(json.JSONDecodeError) as caught:
-        ReplayLLMClient(fixture_dir=tmp).complete("unrecorded")
+        ReplayLLMClient(fixture_dir=tmp).complete("unrecorded", {})
     return f"corrupt fixture: {caught.value}"
 
 
@@ -272,12 +273,36 @@ def _store_empty(tmp: Path) -> str:
     return result.outcome
 
 
+def _run_ai_missing(tmp: Path) -> str:
+    """No seed_* directories: the evaluation set was never generated."""
+    from eval.run_ai import main
+
+    with pytest.raises(SystemExit) as caught:
+        main(["--eval-dir", str(tmp), "--out", str(tmp / "out")])
+    return str(caught.value)
+
+
+def _run_ai_empty(tmp: Path) -> str:
+    """A seed_* directory that EXISTS but holds no day files.
+
+    Distinguishable from absent: the runner gets past the "was it generated"
+    check and fails on the empty directory instead, with a different message.
+    """
+    from eval.run_ai import main
+
+    (tmp / "seed_1000").mkdir(parents=True, exist_ok=True)
+    with pytest.raises(SystemExit) as caught:
+        main(["--eval-dir", str(tmp), "--out", str(tmp / "out")])
+    return str(caught.value)
+
+
 CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "settlesense/ingest.py": (_ingest_missing, lambda _tmp: _ingest_empty()),
     "settlesense/config.py": (_config_missing, _config_empty),
     "eval/run_eval.py": (_run_eval_missing, _run_eval_empty),
     "eval/run_eval_ai.py": (_run_eval_ai_missing, _run_eval_ai_empty),
     "eval/bench.py": (_bench_missing, _bench_empty),
+    "eval/run_ai.py": (_run_ai_missing, _run_ai_empty),
     "settlesense/exceptions/store.py": (_store_missing, _store_empty),
     "settlesense/ai/client.py": (_replay_missing, _replay_empty),
 }

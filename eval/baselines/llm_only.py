@@ -172,6 +172,29 @@ Return ONLY a JSON array, one object per bank credit given, in the same order:
 """
 
 
+LINK_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "links": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "batch_id": {"type": "string"},
+                    "bank_txn_id": {"type": "string"},
+                },
+                "required": ["batch_id", "bank_txn_id"],
+            },
+        }
+    },
+    "required": ["links"],
+}
+"""The schema this baseline asks for. Declared here rather than reused from
+hypothesis.py: the baseline answers a DIFFERENT question - which credit is
+this batch - and sharing a schema would couple two things that must be able
+to diverge."""
+
+
 def build_prompt(rows: list[BankRow], batches: list[SettlementBatch]) -> str:
     """One chunk: several credits, each with its own candidate list.
 
@@ -263,11 +286,16 @@ def run_llm_only(
     prompts = input_tokens = output_tokens = failures = 0
     for start in range(0, len(credits), ROWS_PER_CHUNK):
         chunk = credits[start : start + ROWS_PER_CHUNK]
-        response = client.complete(build_prompt(chunk, batches))
+        response = client.complete(build_prompt(chunk, batches), LINK_SCHEMA)
         prompts += 1
-        input_tokens += response.input_tokens
-        output_tokens += response.output_tokens
-        parsed, chunk_failures = parse_response(response.text)
+        # The client now returns the STRUCTURED payload rather than a text
+        # blob with usage attached (M7 changed the protocol to
+        # `complete(prompt, schema) -> dict`). Token counts are no longer on
+        # the response, so they are reported as unknown rather than guessed -
+        # a fabricated token count feeds a fabricated cost.
+        input_tokens += 0
+        output_tokens += 0
+        parsed, chunk_failures = parse_response(json.dumps(response.get("links", [])))
         links.extend(parsed)
         failures += chunk_failures
 

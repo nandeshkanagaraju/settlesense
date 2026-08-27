@@ -2,6 +2,31 @@
 
 What this project does not establish, stated before anyone has to ask.
 
+## The duplicate-pair task is fingerprinted, and the fingerprint is worthless
+
+**Every injected duplicate carries an `-R###` suffix on its invoice number.**
+Across seed 42: 26 of 5,053 ledger rows carry it, and those 26 are exactly the
+26 rows truth marks as the injected duplicate. Zero false positives, zero false
+negatives. One regex resolves the entire AI-eligible residual.
+
+**It is not used, and must not be.** It is an artifact of how `gen/noise.py`
+mints a unique invoice number for the row it injects, not a property real
+merchant data would have. A verifier that tie-broke on it would score ~100% and
+would generalise to nothing. The structural verifier is deliberately blind to
+invoice numbers.
+
+**What remains genuinely does not distinguish the two rows.** Excluding the
+fingerprint, the halves of a pair share customer, gross, order date, SKU and
+payment count; settlement-chain length differs in 2 of 26 pairs, and order-id
+ordering is a coin flip (10/26). So the honest outcome is that the verifier
+rejects nearly every nomination — which is what it does.
+
+**Consequence for any AI number on this dataset.** The ceiling for a perfect
+model is 27 of 507 pre-registered decisions (5.3%), measured with an oracle
+that always nominates correctly. That figure is a property of the DATASET, not
+of any model, and no model result on this data should be read as evidence about
+model capability.
+
 ## Standing rules earned the hard way
 
 Each of these was added after a defect of that exact shape reached a green test

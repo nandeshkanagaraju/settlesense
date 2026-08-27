@@ -1,0 +1,175 @@
+{
+  "abstain_reasons": {
+    "ALL_REJECTED": 480
+  },
+  "per_seed": [
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 2,
+      "pairs": 31,
+      "seed": 1000,
+      "sent": 31,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 4,
+      "pairs": 25,
+      "seed": 1001,
+      "sent": 25,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 1,
+      "pairs": 26,
+      "seed": 1002,
+      "sent": 26,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 2,
+      "pairs": 29,
+      "seed": 1003,
+      "sent": 29,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 0,
+      "pairs": 24,
+      "seed": 1004,
+      "sent": 24,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 1,
+      "pairs": 18,
+      "seed": 1005,
+      "sent": 18,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 2,
+      "pairs": 23,
+      "seed": 1006,
+      "sent": 23,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 2,
+      "pairs": 24,
+      "seed": 1007,
+      "sent": 24,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 1,
+      "pairs": 22,
+      "seed": 1008,
+      "sent": 22,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 0,
+      "pairs": 34,
+      "seed": 1009,
+      "sent": 34,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 4,
+      "pairs": 29,
+      "seed": 1010,
+      "sent": 29,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 0,
+      "pairs": 23,
+      "seed": 1011,
+      "sent": 23,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 1,
+      "pairs": 25,
+      "seed": 1012,
+      "sent": 25,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 1,
+      "pairs": 27,
+      "seed": 1013,
+      "sent": 27,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 0,
+      "pairs": 30,
+      "seed": 1014,
+      "sent": 30,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 2,
+      "pairs": 25,
+      "seed": 1015,
+      "sent": 25,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 1,
+      "pairs": 30,
+      "seed": 1016,
+      "sent": 30,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 1,
+      "pairs": 19,
+      "seed": 1017,
+      "sent": 19,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 0,
+      "pairs": 24,
+      "seed": 1018,
+      "sent": 24,
+      "silent_confirmed": 0
+    },
+    {
+      "adversarial_confirmed": 0,
+      "oracle_confirmed": 2,
+      "pairs": 19,
+      "seed": 1019,
+      "sent": 19,
+      "silent_confirmed": 0
+    }
+  ],
+  "totals": {
+    "adversarial_confirmed": 0,
+    "decisions_sent": 507,
+    "oracle_confirmed": 27,
+    "oracle_false_confirmed": 0,
+    "seeds": 20,
+    "silent_confirmed": 0
+  }
+}

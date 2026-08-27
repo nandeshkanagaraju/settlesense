@@ -1,13 +1,14 @@
 {
   "_comment": "Collected-test counts, per file and in total. A DROP means tests stopped being COLLECTED, which is not the same as passing. tests/test_env_integrity.py compares against this. Regenerate DELIBERATELY with `SETTLESENSE_ACCEPT_BASELINE=1 make collection-baseline`, in the same commit that changes the test set - never automatically, and never to make a failure go away.",
   "files": {
+    "tests/test_ai.py": 27,
     "tests/test_annotation_integrity.py": 12,
     "tests/test_bench.py": 22,
     "tests/test_config_completeness.py": 24,
     "tests/test_determinism_guard.py": 17,
-    "tests/test_env_integrity.py": 65,
+    "tests/test_env_integrity.py": 66,
     "tests/test_eval_set.py": 49,
-    "tests/test_file_reading_contract.py": 14,
+    "tests/test_file_reading_contract.py": 15,
     "tests/test_gen_ids.py": 9,
     "tests/test_generator_freeze.py": 9,
     "tests/test_ingest.py": 25,
@@ -36,5 +37,5 @@
     "tests/test_types_money.py": 33,
     "tests/test_verbosity_honoured.py": 8
   },
-  "total": 926
+  "total": 955
 }

@@ -77,10 +77,10 @@ Median of 3 repetitions, **never the best run**. No model calls. Full table in
 
 | Records | Cases | Input rows | Pipeline (s) | Cases/s | Peak MiB |
 |---:|---:|---:|---:|---:|---:|
-| 500 | 502 | 1,626 | 0.046 | **10,908** | 1.8 |
-| 5,000 | 5,026 | 15,779 | 0.328 | **15,306** | 19.4 |
-| 25,000 | 25,123 | 78,594 | 1.936 | **12,976** | 94.9 |
-| 100,000 | 100,506 | 313,869 | 8.467 | **11,870** | 379.7 |
+| 500 | 502 | 1,626 | 0.040 | **12,581** | 1.8 |
+| 5,000 | 5,026 | 15,779 | 0.330 | **15,233** | 19.4 |
+| 25,000 | 25,123 | 78,594 | 1.927 | **13,035** | 94.9 |
+| 100,000 | 100,506 | 313,869 | 8.525 | **11,790** | 379.7 |
 
 Pipeline = ingest + engine; dataset generation is excluded from the timed
 region and reported separately. 100k was **attempted and measured** because 25k
@@ -107,15 +107,47 @@ carries the volume; the expensive stage is sized by ambiguity, not by rows:
 
 Roughly one case in a hundred reaches the AI stage, and that ratio holds across
 a 200-fold change in volume. **Seconds and rupees for that stage are not
-reported, because the stage does not exist yet** — M7 is unbuilt and
-`fixtures/llm/` holds zero recorded responses. A `0.000s` row would be
-indistinguishable from a stage that ran and cost nothing.
+reported, because no model has been called** — M7 is built and measured (see
+below), but `fixtures/llm/` holds zero recordings, so there is no timing. A
+`0.000s` row would be indistinguishable from a stage that ran and cost nothing.
 
 Telemetry is a **separate return value** from the business result, not a field
 inside it (SDD 8.1). `ReconciliationResult` contains no float, no duration and
 no timestamp anywhere in its transitive type graph, so a golden comparator has
 nothing to strip — and a test asserts the serialized result is byte-identical
 with instrumentation on and off.
+
+### AI layer — the verified hypothesis loop (`make eval-ai-loop`)
+
+Measured across all **507 pre-registered decisions** (seeds 1000–1019) with
+three stand-in clients and **no model calls at all**. Full table in
+[`reports/ai/ai_loop.json`](reports/ai/ai_loop.json).
+
+| Client | Nominates | Confirmed | |
+|---|---|---:|---|
+| **Oracle** | always the truth-correct row | **27 / 507** | the ceiling |
+| **Adversarial** | always the *wrong* row | **0** | false confirms |
+| **Silent** | nothing schema-valid | **0** | abstains, never crashes |
+
+**27/507 is a ceiling, not a score.** No real model can exceed it: for the other
+480 pairs the structural facts do not distinguish the two rows, so the verifier
+rejects whatever is nominated. Reporting "the AI explained 5%" would report a
+property of the *dataset* as though it were a property of a model.
+
+**The adversarial zero is the safety result.** A verifier that rubber-stamped
+would score identically on the oracle run — only an adversary that is always
+wrong separates discrimination from deference. 480 decisions abstain with
+`ALL_REJECTED`, and the reason names the check that failed.
+
+Why the ceiling is so low is documented in [LIMITATIONS.md](LIMITATIONS.md):
+the injected duplicate carries an invoice-number fingerprint that identifies it
+perfectly and means nothing, and once that is excluded the two halves of a pair
+are structurally identical.
+
+**Cost, budgeted before spending anything:** ~297 input and ~250 output tokens
+per decision; 507 decisions ≈ **$2.35 (₹207)**, or ₹40.98 per 1,000 rows against
+PDD 7.3's ₹50 ceiling. `fixtures/llm/` holds **zero** recordings — the oracle
+already establishes the bound a paid run could not beat.
 
 ### Held-out set — seed 999 (`make eval-holdout`)
 

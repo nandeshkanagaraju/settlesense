@@ -366,11 +366,12 @@ def to_markdown(results: Sequence[SizeResult], machine: MachineSpec, stretch_not
 
 
 def _ai_stage_section(results: Sequence[SizeResult]) -> str:
-    """The AI stage, benchmarked against RESIDUAL count — not row count (B6).
+    """The AI stage, benchmarked against RESIDUAL count - not row count (B6).
 
     This section reports what has been measured and states plainly what has
-    not. M7 is not built and `fixtures/llm/` is empty, so there is no stage to
-    time; a zero here would read as "instant" rather than "absent".
+    not. M7 is built, but no model has been called and `fixtures/llm/` is
+    empty, so there is no timing to report; a zero here would read as
+    "instant" rather than "never invoked".
     """
     lines = [
         "## AI stage — priced against the residual, not the volume",
@@ -389,14 +390,15 @@ def _ai_stage_section(results: Sequence[SizeResult]) -> str:
         "the hot path — which the per-stage table above shows directly, since every "
         "row in it is a rule.",
         "",
-        "**Seconds and rupees are NOT reported here, because the stage does not "
-        "exist yet.** The verified hypothesis loop is M7; `settlesense/ai/"
-        "hypothesis.py` and `verifier.py` are docstring-only stubs and "
-        "`fixtures/llm/` holds zero recorded responses. Printing `0.000s` and `₹0` "
-        "would be indistinguishable in this table from a stage that ran and cost "
-        "nothing. The harness takes those two numbers the moment there is a stage "
-        "to measure, and it will read them from the replay cache, so re-running "
-        "costs nothing.",
+        "**Seconds and rupees are NOT reported here, because no model has been "
+        "called.** The verified hypothesis loop IS built (M7) and is measured in "
+        "reports/ai/ai_loop.json - but with stand-in clients, not a model: an "
+        "oracle that always nominates correctly establishes a ceiling of 27 of "
+        "507 decisions, which no real model can exceed. `fixtures/llm/` holds "
+        "zero recordings, so there is no timing to report. Printing `0.000s` and "
+        "`Rs 0` would be indistinguishable in this table from a stage that ran "
+        "and cost nothing. The harness takes both numbers the moment a fixture "
+        "set exists, reading them from the replay cache so re-running is free.",
     ]
     return "\n".join(lines)
 

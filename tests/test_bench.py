@@ -21,10 +21,12 @@ Both disagreements have the same root: the AI stage does not exist yet.
 
   Req 14a asks the AI table to report residual count "alongside seconds and
   cost". The residual count IS reported and is asserted here. Seconds and cost
-  are NOT, because there is nothing to time: fixtures/llm/ holds zero recorded
-  responses. This file asserts they are declared absent rather than printed as
-  zero, and asserts the fixture directory is still empty - so the moment M7
-  lands, this test fails and the section has to be filled in.
+  are NOT, because no model has been called: fixtures/llm/ holds zero
+  recordings. M7 itself IS built - see tests/test_ai.py, where an oracle client
+  establishes a ceiling of 27 of 507 decisions without a model. This file
+  asserts the timing is declared absent rather than printed as zero, and that
+  the fixture directory is still empty - so the day a fixture set is recorded,
+  this test fails and the section has to be filled in.
 """
 
 from __future__ import annotations
@@ -342,11 +344,11 @@ def test_14_the_call_counter_can_actually_count(tmp_path: Path) -> None:
     A miss still counts: the call was ATTEMPTED, and an attempt that failed is
     exactly the thing a "zero model calls" claim must not hide.
     """
-    from settlesense.ai.client import ReplayMissError
+    from settlesense.ai.client import FixtureMissError
 
     client = ReplayLLMClient(fixture_dir=tmp_path)
-    with pytest.raises(ReplayMissError):
-        client.complete("a prompt with no fixture")
+    with pytest.raises(FixtureMissError):
+        client.complete("a prompt with no fixture", {})
     assert len(client.calls) == 1, f"the counter recorded {len(client.calls)} for one attempt"
     print(
         f"\n  one attempted call -> counter {len(client.calls)}, and it raised rather than dialled"
@@ -390,7 +392,7 @@ def test_14a_the_ai_table_reports_the_residual_count(bench_run: tuple[Path, str]
         assert "second" not in cell.lower() and "cost" not in cell.lower(), (
             f"column {cell!r} prices a stage that does not exist yet"
         )
-    assert "does not exist yet" in ai, "the unbuilt AI stage is not declared unbuilt"
+    assert "no model has been called" in ai, "the absent timing is not explained"
 
 
 def test_14b_the_report_states_which_sizes_ran_and_which_were_skipped(
@@ -590,7 +592,9 @@ def test_the_readme_states_the_machine_and_the_median_rule() -> None:
     assert spec.cpu in section, f"the README does not name the CPU: {spec.cpu}"
     assert str(spec.cores) in section, "the README does not state core count"
     assert "never the best" in section, "the README does not state the median rule"
-    assert "does not exist yet" in section, "the unbuilt AI stage is not declared"
+    assert "no model has been called" in section, (
+        "the README does not explain why the AI stage has no timing"
+    )
     print(f"\n  README states machine ({spec.cpu}, {spec.cores} cores) and the median rule")
 
 

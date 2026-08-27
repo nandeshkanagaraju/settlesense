@@ -26,7 +26,7 @@ define notimpl
 	@exit 1
 endef
 
-.PHONY: help gen gen-holdout eval-set test eval eval-ai ui check golden-accept bench config-check fault-report collection-baseline eval-holdout
+.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop ui check golden-accept bench config-check fault-report collection-baseline eval-holdout
 
 help:
 	@echo "SettleSense targets:"
@@ -41,6 +41,7 @@ help:
 	@echo "  eval          evaluation on the DEV set (seed 42)"
 	@echo "  eval-holdout  the HELD-OUT set (seed 999) - run ONCE, at the end"
 	@echo "  eval-ai       real model run - the experiment, not a test"
+	@echo "  eval-ai-loop  M7 verified hypothesis loop, oracle vs adversarial"
 	@echo "  bench         throughput scaling table"
 	@echo "  ui            evidence queue"
 	@echo "  golden-accept regenerate golden files (deliberately awkward)"
@@ -151,6 +152,18 @@ eval-holdout:
 # M7 has to work with.
 eval-ai:
 	$(PYTHON) -m eval.run_eval_ai --eval-dir data/eval --out reports/eval-ai
+
+# M7. The verified hypothesis loop, measured against the 20-seed evaluation set
+# with THREE stand-in clients and no model at all:
+#
+#   oracle       always nominates the truth-correct row  -> the CEILING
+#   adversarial  always nominates the wrong row          -> false confirms
+#   silent       returns nothing schema-valid            -> must abstain
+#
+# The oracle's count is an upper bound no real model can exceed, so this
+# answers "is it worth recording fixtures" before a rupee is spent.
+eval-ai-loop:
+	$(PYTHON) -m eval.run_ai --eval-dir data/eval --out reports/ai
 
 # Throughput scaling (M5a). THE DEV SEED, never the holdout: a benchmark is
 # re-run on every change, and a held-out set run dozens of times is no longer
