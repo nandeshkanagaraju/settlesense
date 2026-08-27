@@ -500,9 +500,9 @@ def test_13_evidence_citation_is_correct_for_the_category(
     from eval.run_ai import duplicate_exceptions
     from settlesense.ai.client import FIXTURE_DIR, prompt_hash
     from settlesense.ai.hypothesis import build_prompt
-    from settlesense.ui.render import _evidence_index
+    from settlesense.ui.queue import evidence_index
 
-    index = _evidence_index(store, dataset, config)
+    index = evidence_index(store, dataset, config)
     ledger_ids = {row.order_id for row in dataset.ledger_rows}
     pairs = {pair.evidence_row_ids: pair for pair in duplicate_exceptions(dataset)}
     duplicates = [row for row in build_rows(store) if row.category == DUPLICATE]
@@ -540,8 +540,7 @@ def test_14_a_subject_with_no_linked_rows_still_renders_a_trail(
     rendering gap rather than as the finding.
     """
     from settlesense.exceptions.store import ALL_STATUSES, Population
-    from settlesense.ui.queue import money_trail
-    from settlesense.ui.render import _evidence_index
+    from settlesense.ui.queue import evidence_index, money_trail
 
     uncited = [
         exception
@@ -550,7 +549,7 @@ def test_14_a_subject_with_no_linked_rows_still_renders_a_trail(
     ]
     assert uncited, "no batch exception lacks evidence, so this case is untested"
 
-    index = _evidence_index(store, dataset, config)
+    index = evidence_index(store, dataset, config)
     for exception in uncited:
         cited = index[exception.exception_id]
         assert cited and cited[0], f"{exception.exception_id} resolved to no subject"
@@ -620,4 +619,47 @@ def test_18_verified_by_is_populated_and_agrees_with_the_engine(
     print(
         f"\n  {len(rows)} rows, none blank; {len(deterministic)} DETERMINISTIC "
         f"== {len(confirmed)} CONFIRMED; 0 disagreements with the engine"
+    )
+
+
+@pytest.mark.charter_guard
+def test_19_both_views_resolve_the_same_evidence(
+    store: ExceptionStore, dataset: Any, config: AppConfig
+) -> None:
+    """The two views must not disagree, and this is what proves it.
+
+    THIS CAUGHT A REAL DIVERGENCE. The package docstring claimed "two views,
+    one data layer, so they cannot report different numbers" - and that was
+    true of the numbers and false of the EVIDENCE. `render.py` resolved through
+    a private `_evidence_index`; the Streamlit app passed the stored
+    `evidence_row_ids` straight to `money_trail`, so the static page showed a
+    duplicate's ledger pair while the app showed "No source rows resolve for
+    this exception" for the same row. Running the app was the only thing that
+    would have shown it.
+
+    The resolver now lives in the shared layer, and neither renderer may reach
+    past it.
+    """
+    from settlesense.ui.queue import evidence_index
+
+    index = evidence_index(store, dataset, config)
+    rows = build_rows(store)
+    assert len(index) >= len(rows), (len(index), len(rows))
+
+    # Neither view may call money_trail with a raw evidence tuple.
+    for name in ("app.py", "render.py"):
+        source = (REPO / "settlesense" / "ui" / name).read_text(encoding="utf-8")
+        assert "money_trail(row.evidence_row_ids" not in source, (
+            f"{name} bypasses the shared resolver and will disagree with the other view"
+        )
+
+    # And the resolver must actually CHANGE something, or the guard is vacuous.
+    changed = [row.exception_id for row in rows if index[row.exception_id] != row.evidence_row_ids]
+    assert changed, (
+        "the resolver returns the stored evidence unchanged for every row, so "
+        "routing through it proves nothing"
+    )
+    print(
+        f"\n  {len(rows)} rows share one resolver; it rewrites the citation for "
+        f"{len(changed)} of them"
     )

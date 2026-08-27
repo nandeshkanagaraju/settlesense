@@ -29,6 +29,7 @@ from settlesense.ui.queue import (
     arrival_days,
     as_display_dict,
     build_rows,
+    evidence_index,
     money_trail,
     open_store,
     population_summaries,
@@ -108,13 +109,20 @@ def main() -> None:  # pragma: no cover - requires a Streamlit runtime
         st.subheader("Evidence")
         selected = st.selectbox("Exception", [row.exception_id for row in rows], format_func=str)
         row = next(row for row in rows if row.exception_id == selected)
-        _render_evidence(st, row, dataset)
+        # THE SHARED RESOLVER, not row.evidence_row_ids. Passing the stored
+        # ids straight through showed "No source rows resolve" for rows the
+        # static page renders a full trail for - two views disagreeing about
+        # the evidence while agreeing about the numbers.
+        cited = evidence_index(store, dataset, config)[row.exception_id]
+        _render_evidence(st, row, dataset, cited)
 
 
-def _render_evidence(st: Any, row: Any, dataset: Any) -> None:  # pragma: no cover
+def _render_evidence(
+    st: Any, row: Any, dataset: Any, cited: tuple[str, ...]
+) -> None:  # pragma: no cover
     """The five sections, in the order a reviewer needs them."""
     st.markdown("**1 · Money trail**")
-    trail = money_trail(row.evidence_row_ids, dataset)
+    trail = money_trail(cited, dataset)
     if trail.steps:
         st.code(
             "\n".join(

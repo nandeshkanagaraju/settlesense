@@ -19,13 +19,11 @@ from datetime import date
 from itertools import pairwise
 from typing import Any
 
-from eval.run_ai import duplicate_exceptions
 from settlesense.ai.client import FixtureMissError, ReplayLLMClient
 from settlesense.ai.hypothesis import generate
 from settlesense.ai.verifier import verify
 from settlesense.config import AppConfig
 from settlesense.exceptions.store import (
-    ALL_STATUSES,
     RESIDUAL_STATES,
     ExceptionStore,
     Population,
@@ -38,6 +36,7 @@ from settlesense.ui.queue import (
     arrival_days,
     as_display_dict,
     build_rows,
+    evidence_index,
     money_trail,
     population_summaries,
     residual_sequence,
@@ -357,49 +356,6 @@ def _row_html(
     )
 
 
-def _evidence_index(
-    store: ExceptionStore, dataset: DayDataset, config: AppConfig
-) -> dict[str, tuple[str, ...]]:
-    """What each exception's expansion should be built from.
-
-    THREE DIFFERENT ANSWERS, because the engine records evidence appropriate to
-    its own finding and that is not always what a reviewer needs to see:
-
-      A DUPLICATE_CANDIDATE case cites the batch and bank rows its payment
-      settled through - true, and useless for the question at hand. The pair of
-      LEDGER ROWS is what makes it a duplicate, and it is also what the AI
-      fixtures were recorded against, so a row cited any other way would miss
-      the replay cache and show "no recording" for a decision that has one.
-
-      A batch whose credit never arrived cites nothing, because there is
-      nothing to cite. The trail is walked from its subject id instead.
-
-      Everything else uses the evidence the engine recorded.
-    """
-    from settlesense.exceptions.taxonomy import VarianceCategory
-    from settlesense.matching.engine import build_cases
-
-    duplicate = str(VarianceCategory.DUPLICATE_CANDIDATE)
-    order_of_case = {fact.case.case_id: fact.case.order_id for fact in build_cases(dataset, config)}
-    pair_of_order: dict[str, tuple[str, ...]] = {}
-    for pair in duplicate_exceptions(dataset):
-        for order_id in pair.evidence_row_ids:
-            pair_of_order[order_id] = pair.evidence_row_ids
-
-    index: dict[str, tuple[str, ...]] = {}
-    for population in Population:
-        for exception in store.get_queue(ALL_STATUSES, population=population):
-            subject = store._subject_id(exception.exception_id) or ""
-            if exception.category == duplicate:
-                order_id = order_of_case.get(subject, "")
-                index[exception.exception_id] = pair_of_order.get(
-                    order_id, exception.evidence_row_ids
-                )
-                continue
-            index[exception.exception_id] = exception.evidence_row_ids or (subject,)
-    return index
-
-
 def render_page(
     store: ExceptionStore,
     dataset: DayDataset,
@@ -417,7 +373,7 @@ def render_page(
     shown = rows[:limit]
     summaries = population_summaries(store, dataset, config, as_of)
     days = arrival_days(store)
-    evidence = _evidence_index(store, dataset, config)
+    evidence = evidence_index(store, dataset, config)
     client = ReplayLLMClient()
 
     # ONE ROW OPEN BY DEFAULT - the largest AI-eligible one. A page whose
@@ -435,6 +391,8 @@ def render_page(
         (row.exception_id for row in shown if row.category == duplicate),
         next((row.exception_id for row in shown if row.category in AI_ELIGIBLE_CATEGORIES), None),
     )
+    from eval.run_ai import duplicate_exceptions
+
     pair_exceptions = {pair.evidence_row_ids: pair for pair in duplicate_exceptions(dataset)}
     body = "".join(
         _row_html(
