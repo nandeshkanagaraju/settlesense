@@ -595,8 +595,8 @@ def test_the_readme_states_the_machine_and_the_median_rule() -> None:
     assert spec.cpu in section, f"the README does not name the CPU: {spec.cpu}"
     assert str(spec.cores) in section, "the README does not state core count"
     assert "never the best" in section, "the README does not state the median rule"
-    assert "no model has been called" in section, (
-        "the README does not explain why the AI stage has no timing"
+    assert "the BENCH calls no model" in section, (
+        "the README does not explain why the throughput table has no AI timing"
     )
     print(f"\n  README states machine ({spec.cpu}, {spec.cores} cores) and the median rule")
 

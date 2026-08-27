@@ -1,0 +1,124 @@
+{
+  "measured_cost_inr": "12.61",
+  "measured_cost_usd": "0.143340",
+  "measured_input_tokens": 16236,
+  "measured_output_tokens": 10275,
+  "model": "gpt-4o-2024-08-06",
+  "pricing_usd_per_mtok": {
+    "input": "2.50",
+    "output": "10.00"
+  },
+  "recorded": 26,
+  "sample_per_stratum": 20,
+  "selection_rule": "every ambiguous duplicate pair in data/dev (seed 42); no sampling and no stratification - all of them",
+  "strata": {
+    "oracle_confirmed": [
+      {
+        "exception_id": "dup-ORD_06ABD73CD7FD-ORD_1966BAF804E9",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_4430E6EDE984-ORD_EB9D05B89AA8",
+        "seed": 42
+      }
+    ],
+    "oracle_rejected": [
+      {
+        "exception_id": "dup-ORD_07F811BC10AE-ORD_484125798725",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_1411B20C04B4-ORD_1DF616C8EB3B",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_1B1C727D900B-ORD_5D1E3D96158F",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_1E425A6604DB-ORD_B183EE646C1A",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_240B7B7F6897-ORD_5B715F658A11",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_2618FA99FA52-ORD_C55F133F3411",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_28ED0097E049-ORD_F03AF03B146D",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_2A7BA98A9F2D-ORD_841D96192248",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_429320B5281D-ORD_F71F366DAC9E",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_4D55A489A4A9-ORD_88A3FF68D829",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_6272B9C58614-ORD_C015BE11F270",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_68F8BE29249E-ORD_745E3CFCF0BC",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_6A182E2A9A8C-ORD_8A149CE87EA0",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_700EA00E2BE5-ORD_ED9EE95CECB7",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_7251A7509974-ORD_98EE554C9A69",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_798DEFD0F836-ORD_B1C48710E634",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_819BC9BDC1B1-ORD_88202B14F7D5",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_836CFBA07F58-ORD_D2F904A70E3D",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_87A71FC87621-ORD_E3B9F15E676F",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_90524E92D5E2-ORD_F14C890D32FA",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_9242EBFF57EF-ORD_B8A31A075489",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_9E0C56832A4E-ORD_D82014AD61E8",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_AB96DEFA8ED1-ORD_E172B888D830",
+        "seed": 42
+      },
+      {
+        "exception_id": "dup-ORD_AE5BEDB49B67-ORD_CE2F0258501E",
+        "seed": 42
+      }
+    ]
+  }
+}

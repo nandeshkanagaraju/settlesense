@@ -26,7 +26,7 @@ define notimpl
 	@exit 1
 endef
 
-.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop record-fixtures ui check golden-accept bench config-check fault-report collection-baseline eval-holdout
+.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop record-fixtures demo-state ui ui-static check golden-accept bench config-check fault-report collection-baseline eval-holdout
 
 help:
 	@echo "SettleSense targets:"
@@ -44,7 +44,9 @@ help:
 	@echo "  eval-ai-loop  M7 verified hypothesis loop, oracle vs adversarial"
 	@echo "  record-fixtures  record a 40-decision sample (SPENDS MONEY, needs a key)"
 	@echo "  bench         throughput scaling table"
-	@echo "  ui            evidence queue"
+	@echo "  demo-state    build the state DB the queue reads (writes)"
+	@echo "  ui            evidence queue, Streamlit (read-only)"
+	@echo "  ui-static     evidence queue as one HTML file (read-only)"
 	@echo "  golden-accept regenerate golden files (deliberately awkward)"
 
 # --- data generation --------------------------------------------------------
@@ -193,9 +195,23 @@ bench:
 
 # --- interface --------------------------------------------------------------
 
-ui:
-	$(call notimpl,ui,Gate 7 / M8,settlesense/ui/app.py)
+# M8. The evidence queue. READ-ONLY over the state DB, no model calls.
+#
+# `demo-state` writes; `ui` and `ui-static` only read. Keeping the writer in a
+# separate target is what makes "the UI is read-only" checkable rather than
+# promised - the queue opens a database it did not create and refuses if there
+# is none, because an empty queue and a missing DB look identical on screen.
+demo-state:
+	$(PYTHON) -m settlesense.ui.build_state --data data/dev --out reports/ui/state.db
+
+ui: demo-state
 	$(PYTHON) -m streamlit run settlesense/ui/app.py
+
+# The static page is what gets screenshotted for the README and recorded for a
+# video: legibility matters more than interactivity, and a file on disk is
+# easier to capture than a server that has to be running.
+ui-static: demo-state
+	$(PYTHON) -m settlesense.ui.build_static --db reports/ui/state.db --out reports/ui/queue.html
 
 # --- goldens ----------------------------------------------------------------
 

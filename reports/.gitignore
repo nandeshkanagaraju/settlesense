@@ -31,3 +31,10 @@ eval/*
 !ai/
 ai/*
 !ai/ai_loop.json
+
+# The rendered queue is committed - the README links it and the screenshots come
+# from it. state.db is NOT: it is a build output of `make demo-state`, it is
+# large, and a committed database would drift from the code that writes it.
+!ui/
+ui/*
+!ui/queue.html

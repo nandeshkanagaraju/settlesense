@@ -49,7 +49,7 @@ from types import TracebackType
 
 from settlesense.config import AppConfig
 from settlesense.ingest import DayDataset, load_dataset
-from settlesense.matching.engine import merge_days, run
+from settlesense.matching.engine import build_cases, merge_days, run
 from settlesense.types import (
     AuditActor,
     AuditEntry,
@@ -989,17 +989,29 @@ class ExceptionStore:
         count.
         """
         result = run(dataset, config, as_of)
+        # THE MONEY AT STAKE, WHICH IS NOT ALWAYS THE VARIANCE. A
+        # DUPLICATE_CANDIDATE has variance ZERO by construction - the books
+        # balance whichever row is the double entry - but the sum in question
+        # is the order's gross, and recording 0.00 sorted the entire AI-eligible
+        # surface to the bottom of a queue ordered by amount. The M8 queue is
+        # what surfaced it.
+        gross_by_case = {
+            fact.case.case_id: fact.case.expected_gross for fact in build_cases(dataset, config)
+        }
         opened: list[Exception_] = []
 
         for case in result.cases:
             if case.status is ExceptionStatus.CONFIRMED:
                 continue
+            at_stake = case.variance
+            if at_stake is None or at_stake == money(0):
+                at_stake = gross_by_case.get(case.case_id, case.variance)
             opened.extend(
                 self._open_if_new(
                     population=Population.A_CASE,
                     subject_id=case.case_id,
                     category=case.category,
-                    amount=case.variance,
+                    amount=at_stake,
                     status=case.status,
                     evidence=(case.batch_id, case.bank_row_id),
                     reason=f"case {case.case_id}: {case.category or 'unresolved'}",

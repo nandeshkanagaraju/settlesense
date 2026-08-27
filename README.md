@@ -68,6 +68,37 @@ that is one run on one dataset and is reported, not concluded.
 separately: 4,974 deterministic resolutions × 4 min = 19,896 min. The AI layer
 has resolved 0. The two are never added.
 
+### The evidence queue (`make ui-static`)
+
+Read-only over the state DB. Three populations in one table with the population
+named per row, sorted by amount, and a **Verified by** column that carries the
+whole thesis at a glance.
+
+![Evidence queue](docs/evidence-queue.png)
+
+**283 of 339 tracked exceptions say DETERMINISTIC.** The residual sequence
+**3 → 6 → 2** rises before it falls, and the page says why rather than leaving
+a reviewer to assume a bug: a residual is a queue, not a burn-down — day 12
+delivers batches whose credit is still days away.
+
+Every row expands into the full evidence, in the order a reviewer needs it:
+
+![Evidence panel](docs/evidence-panel.png)
+
+That is one real duplicate pair. The money trail follows **both** halves
+end to end (ledger → payment → settlement → batch → bank, identical on both
+sides — which is exactly why it is ambiguous). Below it are gpt-4o's three
+**real** ranked hypotheses, each rejected by name, and the abstention reason
+that 480 of 507 decisions share:
+
+> both rows carry an identical settlement chain (1 lines each), so the
+> structural facts do not distinguish them. The nomination cannot be checked
+> independently, and confirming it would be deferring to the model.
+
+Rendered by [`reports/ui/queue.html`](reports/ui/queue.html); `make ui` serves
+the same data through Streamlit. Both read one data layer, so the page and the
+app cannot disagree.
+
 ### Throughput — dev seed (`make bench`)
 
 `arm · 8 cores · 8 GiB · Python 3.14.7 · macOS-26.6-arm64`
@@ -107,9 +138,10 @@ carries the volume; the expensive stage is sized by ambiguity, not by rows:
 
 Roughly one case in a hundred reaches the AI stage, and that ratio holds across
 a 200-fold change in volume. **Seconds and rupees for that stage are not
-reported, because no model has been called** — M7 is built and measured (see
-below), but `fixtures/llm/` holds zero recordings, so there is no timing. A
-`0.000s` row would be indistinguishable from a stage that ran and cost nothing.
+reported here, because the BENCH calls no model** — it times the deterministic
+pipeline. Real model cost is measured separately and reported below. A
+`0.000s` row in this table would be indistinguishable from a stage that ran and
+cost nothing.
 
 Telemetry is a **separate return value** from the business result, not a field
 inside it (SDD 8.1). `ReconciliationResult` contains no float, no duration and

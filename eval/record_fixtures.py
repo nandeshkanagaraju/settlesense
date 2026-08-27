@@ -231,6 +231,14 @@ def _score(selected: list[Selected], confirmed_stratum: list[Selected], config: 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Record a real-model fixture sample.")
     parser.add_argument("--eval-dir", type=Path, default=Path("data/eval"))
+    parser.add_argument(
+        "--data",
+        type=Path,
+        default=None,
+        help="record EVERY duplicate pair in one dataset instead of the stratified "
+        "sample; used to populate the M8 evidence-queue demo on the dev seed",
+    )
+    parser.add_argument("--seed", type=int, default=42, help="seed of --data, for its truth file")
     parser.add_argument("--config", type=Path, default=Path("config"))
     parser.add_argument(
         "--score",
@@ -245,7 +253,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
-    confirmed, rejected = stratify(args.eval_dir, config)
+    if args.data is not None:
+        # WHOLE-DATASET MODE. No stratification and no sampling: every ambiguous
+        # pair in one dataset, so the evidence queue has a recorded response for
+        # every row a reviewer can click. Selection is not a question here -
+        # "all of them" needs no rule.
+        dataset = load_days(args.data, config)
+        oracle_truth = truth_duplicate_orders(args.data / f"truth_{args.seed}.json")
+        oracle = OracleClient(oracle_truth)
+        confirmed: list[Selected] = []
+        rejected: list[Selected] = []
+        for exception in sorted(duplicate_exceptions(dataset), key=lambda e: e.exception_id):
+            outcome = resolve_exception(exception, dataset, config, oracle)
+            item = Selected(args.seed, exception, str(args.data))
+            (confirmed if outcome.confirmed else rejected).append(item)
+    else:
+        confirmed, rejected = stratify(args.eval_dir, config)
     selected = [*confirmed, *rejected]
     print(
         f"selection rule: {SELECTION_RULE}\n"
@@ -286,7 +309,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     ) / Decimal(1_000_000)
     manifest = {
         "model": MODEL,
-        "selection_rule": SELECTION_RULE,
+        "selection_rule": (
+            f"every ambiguous duplicate pair in {args.data} (seed {args.seed}); no "
+            "sampling and no stratification - all of them"
+            if args.data is not None
+            else SELECTION_RULE
+        ),
         "sample_per_stratum": SAMPLE_PER_STRATUM,
         "strata": {
             "oracle_confirmed": [
@@ -306,8 +334,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "measured_cost_usd": str(cost_usd.quantize(Decimal("0.000001"), ROUND_HALF_UP)),
         "measured_cost_inr": str((cost_usd * USD_PER_INR).quantize(Decimal("0.01"), ROUND_HALF_UP)),
     }
+    # SEPARATE MANIFESTS. The stratified 40-decision sample is the measured
+    # result the README quotes; the whole-dataset dev run exists to populate
+    # the evidence queue. One file would let the second silently overwrite the
+    # first - which it did, once.
+    manifest_name = "llm_manifest_dev.json" if args.data is not None else "llm_manifest.json"
     Path("fixtures").mkdir(exist_ok=True)
-    Path("fixtures/llm_manifest.json").write_text(
+    Path(f"fixtures/{manifest_name}").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(
@@ -315,7 +348,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"  measured tokens: {input_tokens:,} in / {output_tokens:,} out\n"
         f"  measured cost:   ${manifest['measured_cost_usd']} "
         f"= Rs {manifest['measured_cost_inr']}\n"
-        f"wrote fixtures/llm_manifest.json"
+        f"wrote fixtures/{manifest_name}"
     )
     return 0
 
