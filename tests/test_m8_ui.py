@@ -20,6 +20,7 @@ from __future__ import annotations
 import ast
 import re
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ import pytest
 from eval.run_eval import load_days
 from settlesense.config import AppConfig, load_config
 from settlesense.exceptions.store import ExceptionStore, Population
+from settlesense.exceptions.taxonomy import VarianceCategory
 from settlesense.types import ExceptionStatus, ResolutionSource
 from settlesense.ui.queue import (
     POPULATION_LABELS,
@@ -49,6 +51,7 @@ STATE_DB = REPO / "reports" / "ui" / "state.db"
 AS_OF = date(2026, 11, 30)
 
 CHECKPOINTS = (1, 12, 24)
+DUPLICATE = str(VarianceCategory.DUPLICATE_CANDIDATE)
 
 
 @pytest.fixture(scope="module")
@@ -138,7 +141,7 @@ def test_the_queue_never_writes() -> None:
 
 
 @pytest.mark.boundary_refusal
-def test_the_queue_refuses_a_database_it_did_not_find(tmp_path: Path) -> None:
+def test_17_a_missing_database_is_distinguishable_from_an_empty_one(tmp_path: Path) -> None:
     """An empty queue and a missing DB look identical on screen.
 
     So the missing one raises rather than rendering nothing - the same
@@ -154,7 +157,7 @@ def test_the_queue_refuses_a_database_it_did_not_find(tmp_path: Path) -> None:
 # ===========================================================================
 
 
-def test_the_day_range_comes_from_the_store_not_a_hardcoded_1_2_3(
+def test_15_the_day_range_comes_from_arrival_days_never_hardcoded(
     store: ExceptionStore,
 ) -> None:
     """The realised days are 1, 12, 24 - not the first three of anything."""
@@ -168,7 +171,7 @@ def test_the_day_range_comes_from_the_store_not_a_hardcoded_1_2_3(
     print(f"\n  days read from the store: {days}")
 
 
-def test_the_residual_sequence_rises_before_it_falls(store: ExceptionStore) -> None:
+def test_16_the_residual_sequence_has_the_realised_shape(store: ExceptionStore) -> None:
     """3 -> 6 -> 2 on Population B. NON-MONOTONIC, and correctly so.
 
     Asserted as a shape rather than as three literals: what must hold is that
@@ -184,7 +187,7 @@ def test_the_residual_sequence_rises_before_it_falls(store: ExceptionStore) -> N
     print(f"\n  Population B: {' → '.join(str(c) for c in counts)} across days {list(CHECKPOINTS)}")
 
 
-def test_the_page_explains_why_the_residual_rises(
+def test_16b_the_sequence_renders_with_its_explanation(
     store: ExceptionStore, dataset: Any, config: AppConfig
 ) -> None:
     """The rise WITH its reason. A rise shown without one reads as a bug."""
@@ -438,3 +441,183 @@ def test_the_committed_page_and_screenshots_exist() -> None:
         assert image.exists(), f"docs/{shot} is missing"
         assert image.stat().st_size > 50_000, (shot, image.stat().st_size)
     print("\n  queue.html and both screenshots are present")
+
+
+# ===========================================================================
+# 12-14, 18. Meaning, not just presence
+# ===========================================================================
+
+
+def test_12_amount_is_meaningful_not_merely_sortable(store: ExceptionStore) -> None:
+    """No population may have EVERY row at zero.
+
+    SORTING CORRECTNESS ALONE PASSES ON 52 IDENTICAL ZEROS, which is exactly
+    what happened: a duplicate's variance is zero by construction - the books
+    balance whichever row is the double entry - so the whole AI-eligible
+    surface carried amount 0.00 and sorted to the bottom of a queue ordered by
+    amount, invisible. The amount at stake is the order's GROSS.
+
+    Asserted per population, because a single global check passes as long as
+    any one population has money in it.
+    """
+    from settlesense.ui.queue import POPULATION_LABELS
+
+    zero = Decimal("0")
+    for label in POPULATION_LABELS.values():
+        rows = [row for row in build_rows(store) if row.population == label]
+        assert rows, f"population {label} has no rows at all"
+        non_zero = [row for row in rows if row.amount > zero]
+        assert non_zero, (
+            f"every row in population {label} has amount 0.00, so the population "
+            "sorts as one block at the bottom and its exposure is invisible"
+        )
+        print(
+            f"\n  {label}: {len(non_zero)}/{len(rows)} non-zero, "
+            f"max {max(row.amount for row in rows):,.2f}"
+        )
+
+    duplicates = [row for row in build_rows(store) if row.category == DUPLICATE]
+    assert duplicates, "no duplicate rows, so the case this guards is untested"
+    assert all(row.amount > zero for row in duplicates), (
+        f"{sum(1 for r in duplicates if r.amount == zero)} duplicate rows still "
+        "carry 0.00 - the variance is being recorded instead of the gross"
+    )
+    print(f"  {len(duplicates)} duplicate rows, all non-zero")
+
+
+def test_13_evidence_citation_is_correct_for_the_category(
+    store: ExceptionStore, dataset: Any, config: AppConfig
+) -> None:
+    """A duplicate must cite the PAIR OF LEDGER ROWS, and they must replay.
+
+    WRONG-BUT-PRESENT EVIDENCE IS THE FAILURE MODE. The store records the batch
+    and bank rows a duplicate's payment settled through - true, and not what
+    makes it a duplicate. Rows cited that way are not the ids the fixtures were
+    recorded against, so the replay cache misses and the page reports "no model
+    response was recorded" for a decision that has one. Presence is not
+    correctness, so this asserts a cache HIT rather than a non-empty tuple.
+    """
+    from eval.run_ai import duplicate_exceptions
+    from settlesense.ai.client import FIXTURE_DIR, prompt_hash
+    from settlesense.ai.hypothesis import build_prompt
+    from settlesense.ui.render import _evidence_index
+
+    index = _evidence_index(store, dataset, config)
+    ledger_ids = {row.order_id for row in dataset.ledger_rows}
+    pairs = {pair.evidence_row_ids: pair for pair in duplicate_exceptions(dataset)}
+    duplicates = [row for row in build_rows(store) if row.category == DUPLICATE]
+    assert duplicates, "no duplicate rows to check"
+
+    hits = 0
+    for row in duplicates:
+        cited = index[row.exception_id]
+        assert len(cited) == 2, (row.exception_id, cited)
+        assert all(row_id in ledger_ids for row_id in cited), (
+            f"{row.exception_id} cites {cited}, which are not both ledger rows - "
+            "the pair of ledger rows is what makes it a duplicate"
+        )
+        assert cited in pairs, (
+            f"{row.exception_id} cites {cited}, which is not a pair the recorder saw"
+        )
+        prompt = build_prompt(pairs[cited], dataset, config)
+        if (FIXTURE_DIR / f"{prompt_hash(prompt)}.json").exists():
+            hits += 1
+
+    assert hits == len(duplicates), (
+        f"only {hits}/{len(duplicates)} duplicate rows resolve to a recorded "
+        "response; the rest would render 'no recording' for a decision that has one"
+    )
+    print(f"\n  {len(duplicates)} duplicates, all citing ledger pairs, {hits} cache hits")
+
+
+def test_14_a_subject_with_no_linked_rows_still_renders_a_trail(
+    store: ExceptionStore, dataset: Any, config: AppConfig
+) -> None:
+    """A batch whose credit never arrived cites NOTHING, and must still show.
+
+    There is no evidence to cite - that absence IS the exception - so the trail
+    is walked from the subject id instead. An empty panel would read as a
+    rendering gap rather than as the finding.
+    """
+    from settlesense.exceptions.store import ALL_STATUSES, Population
+    from settlesense.ui.queue import money_trail
+    from settlesense.ui.render import _evidence_index
+
+    uncited = [
+        exception
+        for exception in store.get_queue(ALL_STATUSES, population=Population.B_BATCH_LINK)
+        if not exception.evidence_row_ids
+    ]
+    assert uncited, "no batch exception lacks evidence, so this case is untested"
+
+    index = _evidence_index(store, dataset, config)
+    for exception in uncited:
+        cited = index[exception.exception_id]
+        assert cited and cited[0], f"{exception.exception_id} resolved to no subject"
+        trail = money_trail(cited, dataset)
+        assert trail.steps, (
+            f"{exception.exception_id} renders an empty trail; an empty panel reads "
+            "as a rendering gap rather than as a credit that never arrived"
+        )
+        assert not trail.is_complete, (
+            "the trail reaches a bank credit for a batch whose credit never arrived"
+        )
+    print(
+        f"\n  {len(uncited)} batch exceptions with no cited evidence, "
+        f"all rendering a trail from their subject id"
+    )
+
+
+def test_18_verified_by_is_populated_and_agrees_with_the_engine(
+    store: ExceptionStore, dataset: Any, config: AppConfig
+) -> None:
+    """The thesis column, cross-checked against the engine rather than itself.
+
+    A blank or wrong value here silently misstates the central claim, and no
+    other test would notice: the column is the only place the deterministic
+    share is asserted, so checking it against itself would be circular. So the
+    DETERMINISTIC count is compared with what the engine currently says about
+    the same subjects.
+    """
+    from settlesense.matching.engine import run
+    from settlesense.ui.queue import VERIFIED_ABSTAINED, VERIFIED_AI, VERIFIED_DETERMINISTIC
+
+    rows = build_rows(store)
+    permitted = {VERIFIED_DETERMINISTIC, VERIFIED_AI, VERIFIED_ABSTAINED, "HUMAN"}
+    blanks = [row.exception_id for row in rows if not row.verified_by]
+    assert not blanks, f"{len(blanks)} rows have an empty Verified by: {blanks[:3]}"
+    unknown = {row.verified_by for row in rows} - permitted
+    assert not unknown, f"unrecognised values in the column: {unknown}"
+
+    deterministic = [row for row in rows if row.verified_by == VERIFIED_DETERMINISTIC]
+    confirmed = [row for row in rows if row.status is ExceptionStatus.CONFIRMED]
+    assert len(deterministic) == len(confirmed), (
+        f"{len(deterministic)} rows say DETERMINISTIC but {len(confirmed)} are "
+        "CONFIRMED; no AI resolution has been persisted, so the two must agree"
+    )
+    assert not [row for row in rows if row.verified_by == VERIFIED_AI], (
+        "a row claims AI_VERIFIED, but no AI resolution has ever been written"
+    )
+
+    # THE CROSS-CHECK. Every subject the store calls CONFIRMED must be one the
+    # engine now resolves - otherwise the column is reporting a resolution that
+    # the engine would not stand behind.
+    result = run(dataset, config, AS_OF)
+    engine_open = {
+        case.case_id for case in result.cases if case.status is not ExceptionStatus.CONFIRMED
+    } | {
+        link.batch_id for link in result.batch_links if link.status is not ExceptionStatus.CONFIRMED
+    }
+    disagreements = [
+        row.exception_id
+        for row in confirmed
+        if (store._subject_id(row.exception_id) or "") in engine_open
+    ]
+    assert not disagreements, (
+        f"{len(disagreements)} rows are marked resolved by the store but are still "
+        f"open in the engine: {disagreements[:3]}"
+    )
+    print(
+        f"\n  {len(rows)} rows, none blank; {len(deterministic)} DETERMINISTIC "
+        f"== {len(confirmed)} CONFIRMED; 0 disagreements with the engine"
+    )
