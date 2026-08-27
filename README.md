@@ -135,7 +135,7 @@ make eval          # all baselines against the DEV set (seed 42)
 make eval-holdout  # the HELD-OUT set (seed 999) - run ONCE, at the end
 make eval-set      # regenerate the AI evaluation set (seeds 1000-1019)
 make bench         # throughput scaling table -> reports/bench.md
-make test          # no network, deterministic, under 60 seconds
+make test          # no network, deterministic, under 120 seconds
 make check         # ruff + mypy + determinism guard tests
 ```
 
@@ -245,6 +245,33 @@ defined by (frozen generator commit, seed) and regenerate byte-identically;
 `EVAL_SET_MANIFEST.json` records a content hash per seed, which is a
 checkable claim rather than 2,880 files nobody will read. Regenerate with
 `make eval-set`.
+
+## Incremental state — what a multi-day run looks like
+
+`make` has no target for this yet; `tests/test_store.py` drives it. Files arrive
+day by day, exceptions open, wait for evidence, and confirm themselves when a
+later day's bank file lands. `as_of` is derived from the arrival day, so a batch
+whose credit is not yet due is **PENDING_EVIDENCE** rather than being reported as
+a credit that never came.
+
+**Population B residual at three checkpoints: 3 → 6 → 2.**
+
+It rises before it falls, and that is correct. **A residual is a queue, not a
+burn-down** — day 12 delivers batches whose credit is still days away, so
+arrivals outpace departures in the middle of the run. A reviewer's instinct is
+that residuals only shrink; the honest shape is the one above.
+
+What must hold is the **endpoint**, and it does: after every file has arrived,
+the incremental store holds exactly what a single-shot batch run reports, per
+population and never summed — **A 52, B 2, C 2**. Two independent paths, one
+answer. Every other test compares the store against itself; only that one could
+say which of the two is wrong.
+
+The dataset spans **24 delivery days, not 20** — `--days 20` is *capture* days,
+and T+N settlement pushes the last rows out to day 24. Reconciling at day 20
+leaves 557 Population A cases open, correctly: their settlement genuinely has
+not been delivered. An incremental store that already knew about undelivered
+rows would be reading the future.
 
 ## Limitations
 

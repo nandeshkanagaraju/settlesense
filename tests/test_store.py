@@ -23,7 +23,7 @@ from __future__ import annotations
 import ast
 import itertools
 import sqlite3
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -31,6 +31,7 @@ import pytest
 
 from settlesense.config import AppConfig, load_config
 from settlesense.exceptions.store import (
+    ALL_STATUSES,
     LEGAL_TRANSITIONS,
     RESIDUAL_STATES,
     DayRun,
@@ -39,6 +40,7 @@ from settlesense.exceptions.store import (
     MissingFileError,
     Population,
     StoreError,
+    as_of_for_arrival_day,
     exception_id_for,
     idempotency_key_for,
 )
@@ -581,7 +583,7 @@ def test_get_queue_sorts_by_amount_descending_then_id(store: ExceptionStore) -> 
     for exception_id, amount in (("c", "9.00"), ("a", "1000000.00"), ("b", "1000000.00")):
         _seed(store, exception_id=exception_id, amount=amount)
 
-    queue = store.get_queue()
+    queue = store.get_queue(ALL_STATUSES)
     order = [(exc.exception_id, str(exc.amount)) for exc in queue]
     assert [item[0] for item in order] == ["a", "b", "c"], order
     assert queue[0].amount > queue[-1].amount
@@ -601,7 +603,9 @@ def test_the_queue_filters_by_status_and_population(store: ExceptionStore) -> No
     store.upsert_exception(b, Population.B_BATCH_LINK, "BAT_1")
 
     assert [e.exception_id for e in store.get_queue(ExceptionStatus.OPEN)] == ["qa"]
-    assert [e.exception_id for e in store.get_queue(population=Population.B_BATCH_LINK)] == ["qb"]
+    assert [
+        e.exception_id for e in store.get_queue(ALL_STATUSES, population=Population.B_BATCH_LINK)
+    ] == ["qb"]
     assert len(store.get_queue(RESIDUAL_STATES)) == 2
     assert store.get_queue(status_filter=[]) == [], "an empty filter returned everything"
     print("\n  filters: status, population, and an empty list means empty")
@@ -646,10 +650,11 @@ def test_the_store_converges_on_the_batch_engines_residual(
             1 for row in result.row_variances if row.status is not ExceptionStatus.CONFIRMED
         ),
     }
-    # RESIDUAL_STATES, not every status. get_queue defaults to ALL statuses,
-    # so an unfiltered count includes CONFIRMED exceptions - which made an
-    # earlier version of this test pass for the wrong reason: a single-shot
-    # run confirms nothing, so "all" and "residual" happened to coincide.
+    # RESIDUAL_STATES, and the signature now REFUSES to be asked vaguely.
+    # An earlier version of this test passed for the wrong reason: get_queue
+    # defaulted to every status, a single-shot run confirms nothing, so "all"
+    # and "residual" coincided. Under a real multi-day run it reported
+    # Population B as 11 while the store and engine both said 2.
     stored = {
         pop: len(full_run.get_queue(status_filter=RESIDUAL_STATES, population=pop))
         for pop in Population
@@ -663,30 +668,41 @@ def test_the_store_converges_on_the_batch_engines_residual(
     print(f"\n  per population, store == engine: {tally}")
 
 
-def test_the_residual_shrinks_as_evidence_arrives(config: AppConfig, tmp_path: Path) -> None:
-    """The incremental story, measured at checkpoints rather than every day.
+CHECKPOINTS = (1, 12, LAST_DELIVERY_DAY)
+"""Three checkpoints instead of 24 runs.
 
-    Three checkpoints instead of 24 runs, because each run reconciles the
-    CUMULATIVE dataset and 24 of them would cost more than the whole suite's
-    time budget. What matters is the direction and the endpoint: the residual
-    must fall as later days deliver settlement and bank rows, and must land on
-    the batch engine's answer.
+Each run reconciles the CUMULATIVE dataset, so 24 of them would cost more than
+the whole suite's budget. What matters is the direction and the endpoint.
+"""
+
+
+@pytest.fixture(scope="module")
+def incremental_run(
+    config: AppConfig, tmp_path_factory: pytest.TempPathFactory
+) -> tuple[ExceptionStore, dict[int, dict[str, int]]]:
+    """A genuine multi-day store, plus residual counts at each checkpoint.
+
+    Shared because it is the only fixture where CONFIRMED exceptions coexist
+    with residual ones - which is exactly what a single-shot run cannot
+    produce, and exactly what the widened-filter guard needs to detect.
     """
-    checkpoints = (1, 12, LAST_DELIVERY_DAY)
+    store = ExceptionStore(tmp_path_factory.mktemp("m6inc") / "inc.db")
     counts: dict[int, dict[str, int]] = {}
-    with ExceptionStore(tmp_path / "converge.db") as store:
-        for day in checkpoints:
-            store.run_day(day, DATA, config, LATE_AS_OF)
-            # RESIDUAL_STATES, not every status: get_queue defaults to ALL
-            # statuses, so an unfiltered count grows monotonically as
-            # exceptions accumulate and would show the residual "rising" while
-            # it was in fact being confirmed.
-            counts[day] = {
-                pop.value: len(store.get_queue(status_filter=RESIDUAL_STATES, population=pop))
-                for pop in Population
-            }
+    for day in CHECKPOINTS:
+        store.run_day(day, DATA, config, LATE_AS_OF)
+        counts[day] = {
+            pop.value: len(store.get_queue(status_filter=RESIDUAL_STATES, population=pop))
+            for pop in Population
+        }
+    return store, counts
 
-    batch_residual = [counts[day][Population.B_BATCH_LINK.value] for day in checkpoints]
+
+def test_the_residual_shrinks_as_evidence_arrives(
+    incremental_run: tuple[ExceptionStore, dict[int, dict[str, int]]], config: AppConfig
+) -> None:
+    """The incremental story, measured at checkpoints rather than every day."""
+    _store, counts = incremental_run
+    batch_residual = [counts[day][Population.B_BATCH_LINK.value] for day in CHECKPOINTS]
     assert batch_residual[-1] < batch_residual[0], (
         f"Population B did not shrink as bank files arrived: {batch_residual}"
     )
@@ -722,12 +738,14 @@ def test_all_three_populations_persist(full_run: ExceptionStore) -> None:
     """
     # Every status here, deliberately: this test is about PERSISTENCE, and an
     # exception that was opened and later confirmed is still persisted.
-    counts = {pop.value: len(full_run.get_queue(population=pop)) for pop in Population}
+    counts = {
+        pop.value: len(full_run.get_queue(ALL_STATUSES, population=pop)) for pop in Population
+    }
     for population, count in counts.items():
         assert count > 0, f"population {population} persisted nothing"
 
     subjects = {
-        pop.value: {exc.exception_id for exc in full_run.get_queue(population=pop)}
+        pop.value: {exc.exception_id for exc in full_run.get_queue(ALL_STATUSES, population=pop)}
         for pop in Population
     }
     assert not subjects["A"] & subjects["B"], "populations A and B share exception ids"
@@ -852,11 +870,15 @@ def test_rerunning_a_day_is_a_no_op(config: AppConfig, tmp_path: Path) -> None:
     """
     with ExceptionStore(tmp_path / "replay.db") as store:
         first = store.run_day(2, DATA, config, LATE_AS_OF)
-        queue_after_first = [(exc.exception_id, exc.status.value) for exc in store.get_queue()]
+        queue_after_first = [
+            (exc.exception_id, exc.status.value) for exc in store.get_queue(ALL_STATUSES)
+        ]
         audit_after_first = sum(len(store.get_audit(exc_id)) for exc_id, _ in queue_after_first)
 
         second = store.run_day(2, DATA, config, LATE_AS_OF)
-        queue_after_second = [(exc.exception_id, exc.status.value) for exc in store.get_queue()]
+        queue_after_second = [
+            (exc.exception_id, exc.status.value) for exc in store.get_queue(ALL_STATUSES)
+        ]
         audit_after_second = sum(len(store.get_audit(exc_id)) for exc_id, _ in queue_after_second)
 
     assert first.skipped_count == 0 and second.skipped_count == len(second.ingested), (
@@ -905,12 +927,14 @@ def test_the_store_survives_being_reopened(config: AppConfig, tmp_path: Path) ->
     with ExceptionStore(path) as store:
         store.run_day(1, DATA, config, LATE_AS_OF)
         before = [
-            (exc.exception_id, exc.status.value, str(exc.amount)) for exc in store.get_queue()
+            (exc.exception_id, exc.status.value, str(exc.amount))
+            for exc in store.get_queue(ALL_STATUSES)
         ]
 
     with ExceptionStore(path) as reopened:
         after = [
-            (exc.exception_id, exc.status.value, str(exc.amount)) for exc in reopened.get_queue()
+            (exc.exception_id, exc.status.value, str(exc.amount))
+            for exc in reopened.get_queue(ALL_STATUSES)
         ]
         rerun = reopened.run_day(1, DATA, config, LATE_AS_OF)
 
@@ -920,3 +944,134 @@ def test_the_store_survives_being_reopened(config: AppConfig, tmp_path: Path) ->
         f"\n  {len(before)} exceptions survived close/open; re-run skipped all "
         f"{rerun.skipped_count} files"
     )
+
+
+# ===========================================================================
+# M6 review fixes
+# ===========================================================================
+
+
+@pytest.mark.boundary_refusal
+def test_get_queue_requires_an_explicit_status_filter(store: ExceptionStore) -> None:
+    """No default. Every call site names what it is asking for.
+
+    THE DEFECT THIS REMOVES, restated because the fix is only obvious in
+    hindsight: a permissive default gave a convergence test the answer to a
+    question it had not asked - "all statuses" while it meant "residual" - and
+    it passed anyway, because a single-shot run confirms nothing and the two
+    counts coincide. Only a real multi-day run separated them, at which point
+    it reported Population B as 11 while the store and engine both said 2.
+    """
+    _seed(store, exception_id="q1")
+    with pytest.raises(TypeError):
+        store.get_queue()  # type: ignore[call-arg]
+    with pytest.raises(StoreError, match="explicit status_filter"):
+        store.get_queue(None)  # type: ignore[arg-type]
+
+    assert len(store.get_queue(ALL_STATUSES)) == 1
+    assert len(store.get_queue(RESIDUAL_STATES)) == 1
+    assert store.get_queue(ExceptionStatus.CLOSED) == []
+    print("\n  no-arg raises TypeError, None raises StoreError, ALL_STATUSES works")
+
+
+@pytest.mark.charter_guard
+def test_the_convergence_check_fails_if_the_filter_is_widened(
+    incremental_run: tuple[ExceptionStore, dict[int, dict[str, int]]], config: AppConfig
+) -> None:
+    """FAULT INJECTION for fix 3, against the ORIGINAL BUG.
+
+    Runs the convergence comparison twice over the same store: once with
+    RESIDUAL_STATES (correct) and once with ALL_STATUSES (the old default).
+    The first must agree with the engine and the second must not.
+
+    A MULTI-DAY store, not the single-shot one - and the first version of this
+    guard used the single-shot fixture and failed with "widening the filter
+    gives the same answer (2)". That failure was the point restated: a
+    single-shot run confirms nothing, so all-statuses and residual COINCIDE,
+    and a store where they coincide cannot detect the defect. Only a store
+    that has confirmed something across days separates them (11 vs 2).
+    """
+    full_run, _counts = incremental_run
+    dataset = full_run._cumulative_dataset(LAST_DELIVERY_DAY, DATA, config)
+    result = run(dataset, config, LATE_AS_OF)
+    engine_b = sum(1 for link in result.batch_links if link.status is not ExceptionStatus.CONFIRMED)
+
+    correct = len(
+        full_run.get_queue(status_filter=RESIDUAL_STATES, population=Population.B_BATCH_LINK)
+    )
+    widened = len(
+        full_run.get_queue(status_filter=ALL_STATUSES, population=Population.B_BATCH_LINK)
+    )
+
+    assert correct == engine_b, (
+        f"residual filter disagrees with the engine: {correct} vs {engine_b}"
+    )
+    assert widened != engine_b, (
+        f"widening the filter gives the same answer ({widened}) on this store, so "
+        "the test cannot detect the defect it exists to catch"
+    )
+    print(f"\n  engine {engine_b}; residual filter {correct}; widened filter {widened}")
+
+
+@pytest.mark.charter_guard
+def test_run_day_derives_as_of_and_the_override_still_changes_the_answer(
+    config: AppConfig, tmp_path: Path
+) -> None:
+    """Fix 2, BOTH halves. The default is right AND the parameter is read.
+
+    (a) derived default  -> a not-yet-due batch is PENDING_EVIDENCE
+    (b) far-future override -> the same batch is MISSING_VS_LATE_CREDIT
+
+    Both matter. (a) alone would be satisfied by hard-coding a date; (b) alone
+    is the R27 property - a parameter threaded through every signature and
+    never read is behaviourally identical to reading a clock, and D2's scanner
+    sees no clock call either way.
+
+    The SAME batch is followed through both runs, not just aggregate counts: a
+    count could match by coincidence across two different sets of batches.
+    """
+    day = 3
+    derived = as_of_for_arrival_day(day, config)
+    assert derived == config.calendar.window_start + timedelta(days=day - 1)
+
+    with ExceptionStore(tmp_path / "derived.db") as store:
+        store.run_day(day, DATA, config)  # no as_of: derived
+        pending = store.get_queue(
+            status_filter=ExceptionStatus.PENDING_EVIDENCE, population=Population.B_BATCH_LINK
+        )
+    assert pending, "the derived as_of produced no PENDING_EVIDENCE batch at all"
+    subject = pending[0].exception_id
+
+    with ExceptionStore(tmp_path / "override.db") as store:
+        store.run_day(day, DATA, config, as_of=LATE_AS_OF)
+        same_batch = store.get_exception(subject)
+        overridden_pending = store.get_queue(
+            status_filter=ExceptionStatus.PENDING_EVIDENCE, population=Population.B_BATCH_LINK
+        )
+
+    assert same_batch is not None, "the same batch is absent under the override"
+    assert same_batch.status is not ExceptionStatus.PENDING_EVIDENCE, (
+        "the far-future override left the batch PENDING_EVIDENCE - as_of is not being read"
+    )
+    assert same_batch.category == "MISSING_VS_LATE_CREDIT", same_batch.category
+    assert not overridden_pending, (
+        f"{len(overridden_pending)} batches are still PENDING_EVIDENCE under a "
+        "far-future as_of, where nothing can be not-yet-due"
+    )
+    print(
+        f"\n  day {day} derives {derived.isoformat()}: {len(pending)} PENDING_EVIDENCE batches\n"
+        f"  same batch under as_of={LATE_AS_OF.isoformat()}: "
+        f"{same_batch.status.value} / {same_batch.category}"
+    )
+
+
+@pytest.mark.boundary_refusal
+def test_the_derived_as_of_refuses_a_day_outside_the_window(config: AppConfig) -> None:
+    """FAULT INJECTION for the derivation. D13: every date is inside the window."""
+    with pytest.raises(StoreError, match="1-indexed"):
+        as_of_for_arrival_day(0, config)
+    span = (config.calendar.window_end - config.calendar.window_start).days
+    assert as_of_for_arrival_day(span + 1, config) == config.calendar.window_end
+    with pytest.raises(StoreError, match="simulation window"):
+        as_of_for_arrival_day(span + 2, config)
+    print(f"\n  window spans {span + 1} days; day 0 and day {span + 2} both refused")

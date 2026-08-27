@@ -376,17 +376,25 @@ def test_6_hash_ignores_telemetry(dataset: Any, config: AppConfig) -> None:
             dataset, config, AS_OF, collect_timings=True
         )
 
-    assert slow_telemetry.total_seconds() > fast_telemetry.total_seconds() * 2, (
-        "precondition: the two runs did not report different durations, so this "
-        f"proves nothing. fast={fast_telemetry.total_seconds():.4f}s "
-        f"slow={slow_telemetry.total_seconds():.4f}s"
+    # ADDITIVE, not a ratio. The injection adds a fixed penalty per stage, so
+    # the DIFFERENCE is what it controls; the ratio also depends on the
+    # baseline. An earlier version asserted `slow > fast * 2` and passed alone
+    # but failed inside the full suite, where a busier machine raised the
+    # baseline enough to drop the ratio below two while the injection was
+    # working perfectly. A flaky assertion about a deterministic injection.
+    added = slow_telemetry.total_seconds() - fast_telemetry.total_seconds()
+    assert added >= SLEEP_SECONDS, (
+        "precondition: the two runs did not report meaningfully different "
+        f"durations, so this proves nothing. fast={fast_telemetry.total_seconds():.4f}s "
+        f"slow={slow_telemetry.total_seconds():.4f}s added={added:.4f}s "
+        f"(expected at least {SLEEP_SECONDS}s)"
     )
     assert result_hash(fast_result) == result_hash(slow_result), "the hash saw the clock"
     assert serialize_result(fast_result) == serialize_result(slow_result), "golden output differs"
     print(
         f"\n  {fast_telemetry.total_seconds() * 1000:.0f}ms vs "
-        f"{slow_telemetry.total_seconds() * 1000:.0f}ms -> same hash "
-        f"{result_hash(fast_result)[:16]}"
+        f"{slow_telemetry.total_seconds() * 1000:.0f}ms (+{added * 1000:.0f}ms injected) "
+        f"-> same hash {result_hash(fast_result)[:16]}"
     )
 
 

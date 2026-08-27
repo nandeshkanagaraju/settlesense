@@ -33,7 +33,7 @@ help:
 	@echo "  gen           generate the dev dataset       (seed 42)"
 	@echo "  gen-holdout   generate the held-out dataset  (seed 999, +withheld noise)"
 	@echo "  eval-set      regenerate the AI evaluation set (seeds 1000-1019)"
-	@echo "  test          pytest: no network, deterministic, under 60s"
+	@echo "  test          pytest: no network, deterministic, under 120s"
 	@echo "  check         ruff + mypy + determinism guard tests"
 	@echo "  fault-report  guards proven able to fail, by category"
 	@echo "  collection-baseline  re-record collected test counts (deliberately awkward)"

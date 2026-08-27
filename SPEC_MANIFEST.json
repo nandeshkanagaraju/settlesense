@@ -10,10 +10,10 @@
       "sha256": "683f191e15f5c7d3bc00c8c6bd751918a90c5d96bfe0e8a3da097b63d5eee451"
     },
     "SettleSense_SDD.md": {
-      "bytes": 41108,
-      "sha256": "64fbb57de14d3d1717e49f3e89aa13e7c214cce1f147e5296329be65f71b3850"
+      "bytes": 42251,
+      "sha256": "eec1f55a7390c1899c5f7d31deaa6559e0bd8ffdbe1d2304d868990629d2f9eb"
     }
   },
-  "revision": 3,
-  "supersedes_revision": 2
+  "revision": 4,
+  "supersedes_revision": 3
 }

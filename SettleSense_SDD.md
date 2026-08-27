@@ -606,7 +606,15 @@ All loaded into frozen dataclasses. No magic numbers in code.
 | Golden | ~6 | < 15s |
 | Property-based | ~10 | < 10s |
 
-`make test` must run in under 60 seconds with zero network calls.
+`make test` must run in under **120 seconds** with zero network calls.
+
+The original figure was 60 seconds, written at M0 before a single test existed and with no measurement behind it. It was raised at M6, when the realised suite reached 58.8s and the per-tier estimates above had drifted from the code — a budget nobody can meet stops being a budget and starts being a reason to delete tests.
+
+**There is deliberately no `make test-fast`.** A fast target becomes the one that runs in the inner loop, and the slow tests then execute only when someone remembers `make check`. That is the same failure as `-q` swallowing output and as a guard that inspects an empty set: a check that is not running looks exactly like one that passes. This project has hit that family three times, so the whole suite stays behind one target.
+
+`tests/test_suite_budget.py` asserts the realised duration and prints it, naming the three slowest tests when it fails. The next increase is a deliberate decision with evidence, not silent drift.
+
+The two invariants that actually matter are unchanged: **zero network calls**, and **byte-identical results on repeat runs**. Duration is a comfort property; those two are correctness.
 
 **LLM in tests:** `fixtures/llm/<hash>.json` keyed by `sha256(prompt)`. `ReplayLLMClient` looks up the hash; a miss raises loudly rather than falling back to the network. `RealLLMClient.__init__` raises if `PYTEST_CURRENT_TEST` is set.
 

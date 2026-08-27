@@ -2,6 +2,32 @@
 
 What this project does not establish, stated before anyone has to ask.
 
+## Standing rules earned the hard way
+
+Each of these was added after a defect of that exact shape reached a green test
+suite. They are recorded here rather than in a code comment because each one
+generalises past the file that produced it.
+
+**A default that silently widens a query is the same class of defect as a count
+derived by subtraction. Where a function can answer several questions, make the
+caller name which one.**
+
+Three instances so far, all with the same signature — a plausible answer to a
+question nobody asked, indistinguishable from the right answer until a case came
+along where the two diverged:
+
+| Where | The convenient thing | What it hid |
+|---|---|---|
+| Population counts | a count derived by subtraction | a category that belonged to neither side |
+| File reading | empty and missing collapsed to "no rows" | a clean report for a day whose statement never arrived |
+| `get_queue` | `status_filter` defaulting to every status | a convergence test that counted "all" while meaning "residual", reporting 11 where the answer was 2 |
+
+The third passed for the wrong reason and would have kept passing: a single-shot
+run confirms nothing, so "all" and "residual" coincide, and only a real
+multi-day run separates them. `status_filter` is now a required argument, and
+`ALL_STATUSES` exists so that asking for everything is a sentence someone wrote
+on purpose.
+
 ## Dataset
 
 The data is synthetic, produced by an adversarial generator on a separate code

@@ -174,7 +174,7 @@ def test_the_default_flags_are_still_quiet() -> None:
     Without this, "make ARGS=-v is verbose" could be satisfied by making every
     run verbose - trading one wrong default for another and burying the signal
     in 280 lines. Read from the Makefile rather than by running the full suite,
-    which would add ~20s to a 60s budget to learn one fact.
+    which would add ~20s to the 120s budget to learn one fact.
     """
     text = MAKEFILE.read_text("utf-8")
     match = re.search(r"^PYTEST_FLAGS\s*\?=\s*(.+)$", text, re.MULTILINE)

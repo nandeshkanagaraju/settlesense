@@ -41,7 +41,7 @@ import json
 import sqlite3
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
@@ -61,6 +61,7 @@ from settlesense.types import (
 )
 
 __all__ = [
+    "ALL_STATUSES",
     "DayRun",
     "ExceptionStore",
     "IllegalTransitionError",
@@ -68,6 +69,7 @@ __all__ = [
     "MissingFileError",
     "Population",
     "StoreError",
+    "as_of_for_arrival_day",
     "exception_id_for",
     "idempotency_key_for",
 ]
@@ -135,6 +137,21 @@ LEGAL_TRANSITIONS: dict[ExceptionStatus, frozenset[ExceptionStatus]] = {
     ExceptionStatus.CLOSED: frozenset(),  # terminal
 }
 
+ALL_STATUSES: frozenset[ExceptionStatus] = frozenset(ExceptionStatus)
+"""Every status, and a caller has to ASK for it by name.
+
+`get_queue` has no default filter. A default that silently widens a query is
+the same class of defect as a count derived by subtraction: the answer looks
+right, and it is the answer to a question nobody asked. This one had already
+bitten - a convergence test counted "all" while meaning "residual" and
+reported Population B as 11 when the store and the engine both said 2. It
+passed for the wrong reason, because a single-shot run confirms nothing and
+the two counts coincide.
+
+Wanting every status is legitimate; wanting it BY ACCIDENT is not. Spelling
+it `get_queue(ALL_STATUSES)` costs one word and makes the intent reviewable.
+"""
+
 RESIDUAL_STATES: frozenset[ExceptionStatus] = frozenset(
     {
         ExceptionStatus.OPEN,
@@ -159,6 +176,39 @@ is M7's. Recording a flattering 1.00 for a rule would put deterministic and
 AI-verified resolutions on one scale, which is the comparison the whole
 evaluation exists to keep separate.
 """
+
+
+def as_of_for_arrival_day(arrival_day: int, config: AppConfig) -> date:
+    """The date a delivery day corresponds to. NOT a clock read (D2).
+
+    Derived from the configured simulation window, which is data, not a
+    reading of now: day 1 is `window_start`, day N is N-1 calendar days after
+    it. Delivery days are CALENDAR days rather than working days - the
+    generator emits a day 5 and a day 6 for a Saturday and a Sunday, because a
+    file drop that lands on a weekend is still a file drop.
+
+    WHY THIS IS THE DEFAULT AND NOT THE CALLER'S PROBLEM. `as_of` decides
+    whether a batch's credit is not yet due (PENDING_EVIDENCE) or past due and
+    absent (MISSING_VS_LATE_CREDIT). A demo that passed a far-future value -
+    the obvious thing to reach for - would turn every not-yet-due settlement
+    into MISSING_VS_LATE_CREDIT and silently erase a distinction M3 works to
+    draw. The correct value is knowable from the arrival day, so nobody should
+    have to remember it.
+
+    An explicit override stays available, and must: a test probing the
+    boundary needs to ask what happens at a date the calendar would not
+    choose, and a parameter that cannot be varied cannot be shown to matter.
+    """
+    if arrival_day < 1:
+        raise StoreError(f"arrival_day is 1-indexed (SDD 4.1a); got {arrival_day}")
+    derived = config.calendar.window_start + timedelta(days=arrival_day - 1)
+    if derived > config.calendar.window_end:
+        raise StoreError(
+            f"arrival_day {arrival_day} derives {derived.isoformat()}, past the "
+            f"simulation window end {config.calendar.window_end.isoformat()}. "
+            "Every date in this project is inside that window (D13)."
+        )
+    return derived
 
 
 def exception_id_for(population: Population, subject_id: str) -> str:
@@ -463,10 +513,15 @@ class ExceptionStore:
 
     def get_queue(
         self,
-        status_filter: ExceptionStatus | Iterable[ExceptionStatus] | None = None,
+        status_filter: ExceptionStatus | Iterable[ExceptionStatus],
         population: Population | None = None,
     ) -> list[Exception_]:
         """Exceptions sorted by (-amount, exception_id).
+
+        `status_filter` IS REQUIRED. There is no default, and `None` is
+        refused rather than read as "everything". Where a function can answer
+        several questions, the caller names which one - see ALL_STATUSES for
+        what a permissive default cost this project once already.
 
         SORTED IN PYTHON, NOT SQL. Amounts are TEXT because SQLite REAL is a
         float, so `ORDER BY amount DESC` would sort lexically and put ₹9.00
@@ -476,18 +531,26 @@ class ExceptionStore:
         exception_id breaks ties, so two equal amounts have a stable order
         across runs (D4).
         """
+        # Runtime guard as well as a type hint: an untyped caller (a notebook,
+        # a JSON-driven CLI) can still pass None, and a silent "everything" is
+        # the exact defect this signature change exists to remove.
+        if status_filter is None:
+            raise StoreError(
+                "get_queue requires an explicit status_filter. Pass "
+                "RESIDUAL_STATES for the residual set, a single status, or "
+                "ALL_STATUSES to mean every status on purpose. A default that "
+                "silently widens a query gives the right-looking answer to a "
+                "question nobody asked."
+            )
         clauses: list[str] = []
         params: list[str] = []
-        if status_filter is not None:
-            statuses = (
-                [status_filter]
-                if isinstance(status_filter, ExceptionStatus)
-                else list(status_filter)
-            )
-            if not statuses:
-                return []
-            clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
-            params.extend(str(status) for status in statuses)
+        statuses = (
+            [status_filter] if isinstance(status_filter, ExceptionStatus) else list(status_filter)
+        )
+        if not statuses:
+            return []
+        clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
+        params.extend(str(status) for status in statuses)
         if population is not None:
             clauses.append("population = ?")
             params.append(population.value)
@@ -845,19 +908,40 @@ class ExceptionStore:
 
     # -- the day driver ------------------------------------------------------
 
-    def run_day(self, arrival_day: int, data_dir: Path, config: AppConfig, as_of: date) -> DayRun:
+    def run_day(
+        self,
+        arrival_day: int,
+        data_dir: Path,
+        config: AppConfig,
+        as_of: date | None = None,
+    ) -> DayRun:
         """Ingest, re-evaluate, match, persist. No clock read anywhere (D2).
+
+        `as_of=None` DERIVES the date from `arrival_day` (see
+        `as_of_for_arrival_day`). That is the correct value and it is knowable,
+        so it is not something a caller has to remember: a far-future override
+        turns every not-yet-due settlement from PENDING_EVIDENCE into
+        MISSING_VS_LATE_CREDIT, which reads as "the credit never came" for a
+        credit that is not late yet.
+
+        The override remains, and the tests use both: the derived default must
+        produce PENDING_EVIDENCE for a not-yet-due batch, and an explicit
+        far-future value must produce MISSING_VS_LATE_CREDIT for the same one.
+        A parameter that cannot change the answer is a parameter nobody reads,
+        which is behaviourally identical to reading a clock - and D2's scanner
+        would see no clock call either way.
 
         The dataset handed to the engine is CUMULATIVE - every day up to and
         including this one - because a settlement line delivered on day 2 pairs
         with a payment delivered on day 1, and reconciling a day in isolation
         would report both halves as exceptions.
         """
+        resolved_as_of = as_of_for_arrival_day(arrival_day, config) if as_of is None else as_of
         ingested = self._ingest_day_files(arrival_day, data_dir)
         dataset = self._cumulative_dataset(arrival_day, data_dir, config)
 
-        newly_confirmed = self.reevaluate_open(dataset, config, as_of, arrival_day)
-        newly_opened = self._persist_outcomes(dataset, config, as_of, arrival_day)
+        newly_confirmed = self.reevaluate_open(dataset, config, resolved_as_of, arrival_day)
+        newly_opened = self._persist_outcomes(dataset, config, resolved_as_of, arrival_day)
 
         last_seq = max((result.arrival_seq for result in ingested), default=0)
         self.set_watermark("ingest", arrival_day, last_seq)
