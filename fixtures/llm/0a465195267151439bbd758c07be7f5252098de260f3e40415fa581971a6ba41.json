@@ -1,0 +1,52 @@
+{
+  "prompt": "You are reconciling merchant settlement data. Decide nothing; propose\nat most three ranked hypotheses that a deterministic verifier will\ncheck against the data without your help.\n\nEXCEPTION dup-ORD_1A9FD41BF3D3-ORD_D102A839DC56\n  category   DUPLICATE_CANDIDATE\n  amount     42925.22\n  reason     customer CUST-PROFILE_C-00250 has 2 orders at 42925.22: ORD_1A9FD41BF3D3, ORD_D102A839DC56. A data duplicate and a genuine repeat purchase are indistinguishable here; left for the AI layer\n  first seen day 24\n\nEVIDENCE ROWS (sorted by id):\n  ORD_1A9FD41BF3D3: LedgerRow(customer_id=CUST-PROFILE_C-00250, gross=42925.22, invoice_no=INV-C-10-000045, order_date=2026-09-10, order_id=ORD_1A9FD41BF3D3, sku=SKU-CW-MOUNT)\n  ORD_D102A839DC56: LedgerRow(customer_id=CUST-PROFILE_C-00250, gross=42925.22, invoice_no=INV-C-10-000045-R004, order_date=2026-09-10, order_id=ORD_D102A839DC56, sku=SKU-CW-MOUNT)\n\nTOLERANCE 1.00\nCALENDAR calendar_v1\n\nReturn JSON matching the tool schema. Rank best first.\n\n`candidate_id` MUST BE EXACTLY ONE of the evidence ids listed above -\nthe single row you believe is the duplicate entry. Not both, not a\nconcatenation of them, not a new identifier. A candidate_id that is not\none of those ids is rejected without being read.\n\nEvery evidence_row_id must be an id that appears above. If the rows do\nnot distinguish the candidates, say so in `reason` and return fewer\nhypotheses - a guess the verifier cannot check will be rejected.",
+  "response": {
+    "hypotheses": [
+      {
+        "assertion": {
+          "lhs": "ORD_1A9FD41BF3D3",
+          "op": "==",
+          "rhs": "ORD_D102A839DC56"
+        },
+        "candidate_id": "ORD_1A9FD41BF3D3",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_1A9FD41BF3D3",
+          "ORD_D102A839DC56"
+        ],
+        "reason": "Both orders have identical amounts, customer IDs, and order dates. The invoice numbers differ slightly, suggesting a potential duplicate entry for ORD_1A9FD41BF3D3.",
+        "residual_amount": "0.00"
+      },
+      {
+        "assertion": {
+          "lhs": "ORD_D102A839DC56",
+          "op": "==",
+          "rhs": "ORD_1A9FD41BF3D3"
+        },
+        "candidate_id": "ORD_D102A839DC56",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_1A9FD41BF3D3",
+          "ORD_D102A839DC56"
+        ],
+        "reason": "Both orders have identical amounts, customer IDs, and order dates. The invoice numbers differ slightly, suggesting a potential duplicate entry for ORD_D102A839DC56.",
+        "residual_amount": "0.00"
+      },
+      {
+        "assertion": {
+          "lhs": "ORD_1A9FD41BF3D3",
+          "op": "!=",
+          "rhs": "ORD_D102A839DC56"
+        },
+        "candidate_id": "ORD_1A9FD41BF3D3",
+        "category": "UNEXPLAINED",
+        "evidence_row_ids": [
+          "ORD_1A9FD41BF3D3",
+          "ORD_D102A839DC56"
+        ],
+        "reason": "The data does not provide enough evidence to distinguish between a duplicate and a genuine repeat purchase. Further investigation is required.",
+        "residual_amount": "42925.22"
+      }
+    ]
+  }
+}

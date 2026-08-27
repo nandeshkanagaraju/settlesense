@@ -618,6 +618,10 @@ The two invariants that actually matter are unchanged: **zero network calls**, a
 
 **LLM in tests:** `fixtures/llm/<hash>.json` keyed by `sha256(prompt)`. `ReplayLLMClient` looks up the hash; a miss raises loudly rather than falling back to the network. `RealLLMClient.__init__` raises if `PYTEST_CURRENT_TEST` is set.
 
+**Provider:** OpenAI, model pinned to the dated snapshot **`gpt-4o-2024-08-06`** — never the moving `gpt-4o` alias, because a fixture recorded against an alias cannot be reproduced once the alias repoints. `temperature=0`, `top_p=1`, and `seed=` are sent, and `OPENAI_API_KEY` is the only credential read.
+
+**Determinism comes from the replay cache, not from the provider.** OpenAI documents `seed` as best-effort and pairs it with a `system_fingerprint` that changes when the backend changes. The provider settings reduce noise during a recording session; the reproducibility this project claims is the recorded response replayed byte for byte. `seed=` must never be read as a reproducibility guarantee. The provider is reachable from exactly one module — `eval/record_fixtures.py` — and from nowhere in `settlesense/` at runtime.
+
 ---
 
 ## 8. Makefile targets

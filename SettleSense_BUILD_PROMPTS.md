@@ -96,7 +96,7 @@ Create the directory structure exactly as specified in SDD section 2. Empty __in
 files where needed.
 
 Create pyproject.toml with: python >=3.11, and dependencies pytest, pytest-cov,
-hypothesis, pyyaml, python-Levenshtein, streamlit, lxml, anthropic. Dev extras: ruff, mypy.
+hypothesis, pyyaml, python-Levenshtein, streamlit, lxml, openai. Dev extras: ruff, mypy.
 
 Create the three config files from SDD section 6 with real starting values:
 
@@ -925,7 +925,10 @@ Build Module 7: settlesense/ai/.
 
 client.py:
 - LLMClient protocol: complete(prompt, schema) -> dict
-- RealLLMClient: anthropic SDK, temperature=0, top_p=1, pinned model string.
+- RealLLMClient: openai SDK, temperature=0, top_p=1, model pinned to the dated
+  snapshot `gpt-4o-2024-08-06` (never the moving `gpt-4o` alias). `seed=` is
+  passed but is BEST EFFORT and is not a determinism claim - reproducibility
+  comes from the replay cache, not from the provider.
   Its __init__ MUST raise RuntimeError if os.environ.get("PYTEST_CURRENT_TEST") is set (D7).
 - ReplayLLMClient: reads fixtures/llm/<sha256(prompt)>.json. A cache miss raises
   FixtureMissError loudly, naming the missing hash. It must NEVER fall back to network.

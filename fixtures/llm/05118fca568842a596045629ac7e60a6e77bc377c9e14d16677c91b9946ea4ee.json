@@ -1,0 +1,52 @@
+{
+  "prompt": "You are reconciling merchant settlement data. Decide nothing; propose\nat most three ranked hypotheses that a deterministic verifier will\ncheck against the data without your help.\n\nEXCEPTION dup-ORD_23E238D26B64-ORD_BCD27BABE711\n  category   DUPLICATE_CANDIDATE\n  amount     6169.14\n  reason     customer CUST-PROFILE_B-00143 has 2 orders at 6169.14: ORD_23E238D26B64, ORD_BCD27BABE711. A data duplicate and a genuine repeat purchase are indistinguishable here; left for the AI layer\n  first seen day 24\n\nEVIDENCE ROWS (sorted by id):\n  ORD_23E238D26B64: LedgerRow(customer_id=CUST-PROFILE_B-00143, gross=6169.14, invoice_no=INV-B-01-000011-R013, order_date=2026-09-01, order_id=ORD_23E238D26B64, sku=SKU-BP-DESSERT)\n  ORD_BCD27BABE711: LedgerRow(customer_id=CUST-PROFILE_B-00143, gross=6169.14, invoice_no=INV-B-01-000011, order_date=2026-09-01, order_id=ORD_BCD27BABE711, sku=SKU-BP-DESSERT)\n\nTOLERANCE 1.00\nCALENDAR calendar_v1\n\nReturn JSON matching the tool schema. Rank best first.\n\n`candidate_id` MUST BE EXACTLY ONE of the evidence ids listed above -\nthe single row you believe is the duplicate entry. Not both, not a\nconcatenation of them, not a new identifier. A candidate_id that is not\none of those ids is rejected without being read.\n\nEvery evidence_row_id must be an id that appears above. If the rows do\nnot distinguish the candidates, say so in `reason` and return fewer\nhypotheses - a guess the verifier cannot check will be rejected.",
+  "response": {
+    "hypotheses": [
+      {
+        "assertion": {
+          "lhs": "ORD_23E238D26B64.invoice_no",
+          "op": "==",
+          "rhs": "ORD_BCD27BABE711.invoice_no"
+        },
+        "candidate_id": "ORD_BCD27BABE711",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_23E238D26B64",
+          "ORD_BCD27BABE711"
+        ],
+        "reason": "Both orders have the same invoice number, suggesting a potential duplicate entry. ORD_BCD27BABE711 is considered the duplicate due to its later appearance in the dataset.",
+        "residual_amount": "0.00"
+      },
+      {
+        "assertion": {
+          "lhs": "ORD_23E238D26B64.order_date",
+          "op": "==",
+          "rhs": "ORD_BCD27BABE711.order_date"
+        },
+        "candidate_id": "ORD_23E238D26B64",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_23E238D26B64",
+          "ORD_BCD27BABE711"
+        ],
+        "reason": "Both orders have the same order date, indicating a possible duplicate. ORD_23E238D26B64 is considered the duplicate due to its earlier appearance in the dataset.",
+        "residual_amount": "0.00"
+      },
+      {
+        "assertion": {
+          "lhs": "ORD_23E238D26B64.sku",
+          "op": "==",
+          "rhs": "ORD_BCD27BABE711.sku"
+        },
+        "candidate_id": "ORD_BCD27BABE711",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_23E238D26B64",
+          "ORD_BCD27BABE711"
+        ],
+        "reason": "Both orders have the same SKU, suggesting a potential duplicate entry. ORD_BCD27BABE711 is considered the duplicate due to its later appearance in the dataset.",
+        "residual_amount": "0.00"
+      }
+    ]
+  }
+}

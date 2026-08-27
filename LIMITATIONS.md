@@ -27,6 +27,34 @@ that always nominates correctly. That figure is a property of the DATASET, not
 of any model, and no model result on this data should be read as evidence about
 model capability.
 
+## The real-model sample is 40 decisions, not 507
+
+A live sample WAS recorded — 40 decisions against OpenAI `gpt-4o-2024-08-06` —
+and it is the only evidence here about how a real model behaves on this task.
+The 507-decision figures come from stand-in clients and are properties of the
+verifier and the data, not of any model.
+
+**40 is not enough to characterise a model.** It was chosen to demonstrate the
+verifier accepting and rejecting real output, not to measure accuracy. The
+20/20 on the confirmable stratum should be read as "the model found the
+evidence where it exists on these twenty", not as a precision estimate: the
+error bars on n=20 are wide, and the sample is stratified rather than random.
+
+**Two defects in this project were found only by real model output**, which is
+the strongest argument for having recorded anything at all:
+
+- The prompt never said what `candidate_id` meant, so the model returned the
+  pair id `"ORD_A-ORD_B"` in all 40 cases. Synthetic clients had always
+  supplied a single row id, so nothing had ever exercised the requirement.
+- The verifier dispatched to the arithmetic or structural path by *whether an
+  assertion was present*. The model attaches an assertion to every claim, so
+  every duplicate hypothesis was routed to the arithmetic path and rejected for
+  failing the field grammar — including the ones nominating the right row.
+  Dispatch is now by category.
+
+Both were rejections for the wrong reason, and both looked like the
+architecture working until the numbers were read carefully.
+
 ## Standing rules earned the hard way
 
 Each of these was added after a defect of that exact shape reached a green test

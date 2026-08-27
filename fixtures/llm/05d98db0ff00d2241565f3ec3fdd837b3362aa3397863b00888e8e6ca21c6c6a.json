@@ -1,0 +1,52 @@
+{
+  "prompt": "You are reconciling merchant settlement data. Decide nothing; propose\nat most three ranked hypotheses that a deterministic verifier will\ncheck against the data without your help.\n\nEXCEPTION dup-ORD_08E6463C5A24-ORD_E63DC252F7C0\n  category   DUPLICATE_CANDIDATE\n  amount     4151.67\n  reason     customer CUST-PROFILE_A-00071 has 2 orders at 4151.67: ORD_08E6463C5A24, ORD_E63DC252F7C0. A data duplicate and a genuine repeat purchase are indistinguishable here; left for the AI layer\n  first seen day 23\n\nEVIDENCE ROWS (sorted by id):\n  ORD_08E6463C5A24: LedgerRow(customer_id=CUST-PROFILE_A-00071, gross=4151.67, invoice_no=INV-A-08-000074-R033, order_date=2026-09-08, order_id=ORD_08E6463C5A24, sku=SKU-AR-DECOR)\n  ORD_E63DC252F7C0: LedgerRow(customer_id=CUST-PROFILE_A-00071, gross=4151.67, invoice_no=INV-A-08-000074, order_date=2026-09-08, order_id=ORD_E63DC252F7C0, sku=SKU-AR-DECOR)\n\nTOLERANCE 1.00\nCALENDAR calendar_v1\n\nReturn JSON matching the tool schema. Rank best first.\n\n`candidate_id` MUST BE EXACTLY ONE of the evidence ids listed above -\nthe single row you believe is the duplicate entry. Not both, not a\nconcatenation of them, not a new identifier. A candidate_id that is not\none of those ids is rejected without being read.\n\nEvery evidence_row_id must be an id that appears above. If the rows do\nnot distinguish the candidates, say so in `reason` and return fewer\nhypotheses - a guess the verifier cannot check will be rejected.",
+  "response": {
+    "hypotheses": [
+      {
+        "assertion": {
+          "lhs": "ORD_08E6463C5A24.invoice_no",
+          "op": "!=",
+          "rhs": "ORD_E63DC252F7C0.invoice_no"
+        },
+        "candidate_id": "ORD_E63DC252F7C0",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_08E6463C5A24",
+          "ORD_E63DC252F7C0"
+        ],
+        "reason": "The invoice numbers differ slightly, suggesting a potential duplicate entry for ORD_E63DC252F7C0.",
+        "residual_amount": "0.00"
+      },
+      {
+        "assertion": {
+          "lhs": "ORD_08E6463C5A24.order_date",
+          "op": "==",
+          "rhs": "ORD_E63DC252F7C0.order_date"
+        },
+        "candidate_id": "ORD_08E6463C5A24",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_08E6463C5A24",
+          "ORD_E63DC252F7C0"
+        ],
+        "reason": "Both orders have the same order date, indicating a possible duplicate entry for ORD_08E6463C5A24.",
+        "residual_amount": "0.00"
+      },
+      {
+        "assertion": {
+          "lhs": "ORD_08E6463C5A24.sku",
+          "op": "==",
+          "rhs": "ORD_E63DC252F7C0.sku"
+        },
+        "candidate_id": "ORD_08E6463C5A24",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_08E6463C5A24",
+          "ORD_E63DC252F7C0"
+        ],
+        "reason": "Both orders have the same SKU, suggesting a potential duplicate entry for ORD_08E6463C5A24.",
+        "residual_amount": "0.00"
+      }
+    ]
+  }
+}

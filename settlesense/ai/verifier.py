@@ -45,6 +45,7 @@ from settlesense.types import Money, money
 
 __all__ = [
     "FIELD_GRAMMAR",
+    "STRUCTURAL_CATEGORIES",
     "GrammarError",
     "VerificationResult",
     "evaluate_assertion",
@@ -160,6 +161,26 @@ def evaluate_assertion(
     return bool(operator(left, right)), residual
 
 
+STRUCTURAL_CATEGORIES: frozenset[str] = frozenset({str(VarianceCategory.DUPLICATE_CANDIDATE)})
+"""Categories whose check is STRUCTURAL, whatever the hypothesis carries.
+
+DISPATCH IS BY CATEGORY, NOT BY WHETHER AN ASSERTION IS PRESENT. The first
+version dispatched on `hypothesis.is_structural` - assertion absent means
+structural - and a real model broke it immediately: gpt-4o attached an
+assertion like `{lhs: "ORD_A", op: "==", rhs: "ORD_B"}` to every
+DUPLICATE_CANDIDATE claim. Those went down the arithmetic path, failed the
+field grammar, and were rejected as malformed - including the 11 of 20 the
+model had nominated CORRECTLY.
+
+That is the wrong reason to reject. DUPLICATE_CANDIDATE has no arithmetic to
+recompute: there is no residual and no tolerance. The category determines what
+is checkable, so a spurious assertion is noise to be ignored rather than a
+route to a check that cannot apply. The claim is still verified - by the
+structural path, independently, and it still rejects when the facts do not
+distinguish the rows.
+"""
+
+
 def verify(hypothesis: Hypothesis, dataset: DayDataset, config: AppConfig) -> VerificationResult:
     """The one entry point. Resolve evidence, then take the matching path."""
     tolerance = config.thresholds.tolerance.verifier_rupees
@@ -190,8 +211,21 @@ def verify(hypothesis: Hypothesis, dataset: DayDataset, config: AppConfig) -> Ve
             checks_run=("evidence_resolution",),
         )
 
-    if hypothesis.is_structural:
+    # CATEGORY FIRST. See STRUCTURAL_CATEGORIES for why an assertion supplied
+    # against a structural category is ignored rather than followed.
+    if hypothesis.category in STRUCTURAL_CATEGORIES:
         return _verify_structural(hypothesis, resolved, dataset, completeness)
+    if hypothesis.assertion is None:
+        return VerificationResult(
+            passed=False,
+            computed_residual=None,
+            failure_reason=(
+                f"{hypothesis.category} is verified arithmetically but the "
+                "hypothesis carries no assertion, so there is nothing to recompute"
+            ),
+            checks_run=("dispatch",),
+            evidence_completeness=completeness,
+        )
     return _verify_arithmetic(hypothesis, resolved, tolerance, completeness)
 
 

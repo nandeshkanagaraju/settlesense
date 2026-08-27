@@ -144,10 +144,48 @@ the injected duplicate carries an invoice-number fingerprint that identifies it
 perfectly and means nothing, and once that is excluded the two halves of a pair
 are structurally identical.
 
-**Cost, budgeted before spending anything:** ~297 input and ~250 output tokens
-per decision; 507 decisions ≈ **$2.35 (₹207)**, or ₹40.98 per 1,000 rows against
-PDD 7.3's ₹50 ceiling. `fixtures/llm/` holds **zero** recordings — the oracle
-already establishes the bound a paid run could not beat.
+**Provider:** OpenAI, pinned to the dated snapshot **`gpt-4o-2024-08-06`** —
+never the moving `gpt-4o` alias, because a fixture recorded against an alias
+cannot be reproduced once it repoints. `temperature=0`, `top_p=1`, `seed=42`.
+
+**Determinism comes from the replay cache, not from the provider.** OpenAI
+documents `seed` as best-effort. The provider settings reduce noise while
+recording; the guarantee is the recorded response replayed byte for byte. The
+provider is reachable from exactly one module, `eval/record_fixtures.py`, and
+from nowhere in `settlesense/` at runtime.
+
+### A real model in the loop — 40 recorded decisions
+
+A stratified sample was recorded against the live provider: **20 the oracle
+confirms, 20 it rejects**, chosen by a rule fixed in
+`eval/record_fixtures.py` *before* any model was called, and stored in
+`fixtures/llm_manifest.json` so the ordering is checkable. Scored in
+[`reports/ai/real_model_sample.json`](reports/ai/real_model_sample.json).
+
+| | |
+|---|---|
+| Produced a parseable hypothesis | **40 / 40** |
+| Nominated one of the two rows | **40 / 40** |
+| Decisive nomination correct | **33 / 40** |
+| …its *top-ranked* guess | 24 / 40 |
+| …on the confirmable stratum | **20 / 20** |
+| Verifier confirmed — model | **20 / 40** |
+| Verifier confirmed — oracle | 20 / 40 |
+| **False confirms** | **0** |
+
+**The model ties the oracle where evidence exists and is rejected everywhere
+else.** On the 20 confirmable pairs it nominated correctly every time; on the
+20 where the structural facts do not distinguish the rows, the verifier
+rejected it — as it rejects a perfect nominator on those same pairs.
+
+**Ranked hypotheses are not decoration.** The top-ranked guess is right 24/40,
+but the nomination the verifier *acted on* is right 33/40 — because it tries
+rank 0, 1, 2 in order and discards the ones that do not check out.
+
+**Cost, MEASURED from the API response** (not estimated from prompt length):
+24,996 input and 15,760 output tokens for 40 decisions =
+**$0.220090 (₹19.37)**, about **₹2.49 per 1,000 rows**
+against PDD 7.3's ₹50 ceiling.
 
 ### Held-out set — seed 999 (`make eval-holdout`)
 

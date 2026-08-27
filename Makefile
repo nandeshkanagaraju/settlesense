@@ -26,7 +26,7 @@ define notimpl
 	@exit 1
 endef
 
-.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop ui check golden-accept bench config-check fault-report collection-baseline eval-holdout
+.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop record-fixtures ui check golden-accept bench config-check fault-report collection-baseline eval-holdout
 
 help:
 	@echo "SettleSense targets:"
@@ -42,6 +42,7 @@ help:
 	@echo "  eval-holdout  the HELD-OUT set (seed 999) - run ONCE, at the end"
 	@echo "  eval-ai       real model run - the experiment, not a test"
 	@echo "  eval-ai-loop  M7 verified hypothesis loop, oracle vs adversarial"
+	@echo "  record-fixtures  record a 40-decision sample (SPENDS MONEY, needs a key)"
 	@echo "  bench         throughput scaling table"
 	@echo "  ui            evidence queue"
 	@echo "  golden-accept regenerate golden files (deliberately awkward)"
@@ -164,6 +165,18 @@ eval-ai:
 # answers "is it worth recording fixtures" before a rupee is spent.
 eval-ai-loop:
 	$(PYTHON) -m eval.run_ai --eval-dir data/eval --out reports/ai
+
+# THE ONLY TARGET THAT SPENDS MONEY, and the only one that touches a network.
+# Records a 40-decision stratified sample (20 the oracle confirms, 20 it
+# rejects) against the pinned OpenAI snapshot. Needs OPENAI_API_KEY.
+#
+# --dry-run prints the exact sample and calls nothing, which is how to check the
+# selection before paying for it.
+record-fixtures:
+	@test -n "$$OPENAI_API_KEY" || \
+	  (echo "OPENAI_API_KEY is not set. Nothing else in this project needs it:"; \
+	   echo "tests, eval and bench all replay from fixtures/llm/."; exit 1)
+	$(PYTHON) -m eval.record_fixtures --eval-dir data/eval
 
 # Throughput scaling (M5a). THE DEV SEED, never the holdout: a benchmark is
 # re-run on every change, and a held-out set run dozens of times is no longer

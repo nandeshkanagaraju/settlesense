@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 import socket
 from decimal import Decimal
 from pathlib import Path
@@ -29,6 +30,7 @@ from typing import Any
 
 import pytest
 
+from eval.record_fixtures import SELECTION_RULE
 from eval.run_ai import (
     SENDABLE,
     AdversarialClient,
@@ -39,6 +41,7 @@ from eval.run_ai import (
 )
 from eval.run_eval import load_days
 from settlesense.ai.client import (
+    API_KEY_VARIABLE,
     MODEL,
     TEMPERATURE,
     TOP_P,
@@ -129,18 +132,99 @@ def test_the_real_client_refuses_to_exist_inside_a_test_run() -> None:
     print("\n  RealLLMClient refuses construction, with and without an explicit key")
 
 
-def test_the_client_pins_a_model_and_disables_sampling() -> None:
-    """temperature=0, top_p=1, a pinned model string.
+def test_the_client_pins_a_dated_model_snapshot_and_disables_sampling() -> None:
+    """temperature=0, top_p=1, and a DATED model snapshot.
 
-    A sampled model makes one prompt produce different hypotheses on two runs,
-    so a golden comparison fails for reasons nobody can reproduce.
+    `gpt-4o` is an alias that repoints as OpenAI ships new versions;
+    `gpt-4o-2024-08-06` does not. A fixture recorded against an alias cannot be
+    reproduced later, because the thing that produced it no longer exists under
+    that name.
     """
     assert TEMPERATURE == 0, TEMPERATURE
     assert TOP_P == 1, TOP_P
-    assert MODEL and "latest" not in MODEL, f"{MODEL} is an alias, which silently repoints"
+    assert re.search(r"-\d{4}-\d{2}-\d{2}$", MODEL), (
+        f"{MODEL!r} is not a dated snapshot; an alias silently repoints and a "
+        "recorded fixture stops being reproducible"
+    )
+    assert "latest" not in MODEL, MODEL
     source = (AI_DIR / "client.py").read_text(encoding="utf-8")
     assert "temperature=TEMPERATURE" in source and "top_p=TOP_P" in source
-    print(f"\n  model={MODEL} temperature={TEMPERATURE} top_p={TOP_P}")
+    print(f"\n  model={MODEL} (dated snapshot) temperature={TEMPERATURE} top_p={TOP_P}")
+
+
+def test_seed_is_sent_but_never_presented_as_a_determinism_guarantee() -> None:
+    """The provider is best-effort; the REPLAY CACHE is the guarantee.
+
+    Asserted on the documentation as well as the code, because the risk here is
+    not that `seed=` stops being sent - it is that someone later reads it as a
+    reproducibility claim and deletes the fixtures.
+    """
+    source = (AI_DIR / "client.py").read_text(encoding="utf-8")
+    assert "seed=SEED" in source, "seed is not sent at all"
+    assert "best effort" in source.lower() or "best-effort" in source.lower(), (
+        "the code does not record that the provider's seed is best-effort"
+    )
+    assert "DETERMINISM COMES FROM THE REPLAY CACHE" in source, (
+        "the module docstring does not say where determinism actually comes from"
+    )
+    sdd = (REPO / "SettleSense_SDD.md").read_text(encoding="utf-8")
+    assert "best-effort" in sdd and "replay cache, not from the provider" in sdd, (
+        "SDD 7 does not distinguish the provider's seed from the project's guarantee"
+    )
+    print("\n  seed sent; docstring and SDD 7 both refuse to call it a guarantee")
+
+
+def test_the_client_names_the_credential_it_needs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OPENAI_API_KEY, named in the error. D7 still fires first.
+
+    The D7 guard is checked BEFORE the key, so a test run refuses regardless of
+    whether a key happens to be present - which is the ordering that makes the
+    suite incapable of billing anyone.
+    """
+    assert API_KEY_VARIABLE == "OPENAI_API_KEY", API_KEY_VARIABLE
+    source = (AI_DIR / "client.py").read_text(encoding="utf-8")
+    assert "ANTHROPIC_API_KEY" not in source, "a stale provider credential is still read"
+
+    monkeypatch.setenv(API_KEY_VARIABLE, "sk-whatever")
+    with pytest.raises(RuntimeError, match="PYTEST_CURRENT_TEST"):
+        RealLLMClient()
+    print(f"\n  reads {API_KEY_VARIABLE}; D7 refuses even with a key present")
+
+
+def test_the_provider_is_reachable_from_exactly_one_module() -> None:
+    """settlesense/ must not import the vendor SDK at module scope.
+
+    The import lives inside `RealLLMClient.complete`, so importing anything
+    from settlesense/ cannot pull in the provider - and the recording script is
+    the only caller.
+    """
+    offenders: list[str] = []
+    for path in sorted((REPO / "settlesense").rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:  # MODULE SCOPE only - a deferred import is fine
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            if any(name.split(".")[0] == "openai" for name in names):
+                offenders.append(f"{path.relative_to(REPO)}:{node.lineno}")
+    assert not offenders, f"the vendor SDK is imported at module scope: {offenders}"
+
+    callers = [
+        path.relative_to(REPO).as_posix()
+        for path in sorted(REPO.rglob("*.py"))
+        if ".venv" not in path.parts
+        and "__pycache__" not in path.parts
+        and "RealLLMClient(" in path.read_text(encoding="utf-8")
+        and path.name not in {"client.py", "test_ai.py"}
+    ]
+    assert callers == ["eval/record_fixtures.py"], (
+        f"RealLLMClient is constructed outside the recording script: {callers}"
+    )
+    print(f"\n  vendor SDK imported lazily; only caller is {callers[0]}")
 
 
 @pytest.mark.boundary_refusal
@@ -768,3 +852,186 @@ def test_no_settlesense_module_reads_truth() -> None:
         for n in ast.walk(planted)
     ), "the scan matches nothing"
     print("\n  settlesense/ reads no truth field (docstrings excluded, AST-scanned)")
+
+
+# ===========================================================================
+# 6. The recorded real-model sample
+# ===========================================================================
+
+REAL_SAMPLE = REPO / "reports" / "ai" / "real_model_sample.json"
+FIXTURE_MANIFEST = REPO / "fixtures" / "llm_manifest.json"
+
+
+@pytest.mark.charter_guard
+def test_the_verifier_dispatches_by_category_not_by_assertion_presence(
+    exceptions: tuple[Exception_, ...], dataset: Any, config: AppConfig
+) -> None:
+    """THE BUG A REAL MODEL FOUND. gpt-4o attaches an assertion to everything.
+
+    The first dispatch read "no assertion means structural", so every
+    DUPLICATE_CANDIDATE claim carrying an assertion like
+    `{lhs: "ORD_A", op: "==", rhs: "ORD_B"}` went down the ARITHMETIC path,
+    failed the field grammar, and was rejected as malformed - including the
+    ones nominating the right row. That is the wrong reason to reject.
+
+    DUPLICATE_CANDIDATE has no arithmetic to recompute, so the category decides
+    the path and a spurious assertion is ignored. The claim is still verified,
+    structurally and independently.
+    """
+    from settlesense.ai.verifier import STRUCTURAL_CATEGORIES
+
+    assert DUPLICATE in STRUCTURAL_CATEGORIES, STRUCTURAL_CATEGORIES
+    pair = exceptions[0].evidence_row_ids
+    noisy = Hypothesis(
+        category=DUPLICATE,
+        candidate_id=pair[0],
+        # An assertion that could never parse as a field reference.
+        assertion=Assertion(lhs=pair[0], op="==", rhs=pair[1]),
+        residual_amount=None,
+        evidence_row_ids=pair,
+        reason="a real model attaches one of these to every claim",
+        rank=0,
+    )
+    result = verify(noisy, dataset, config)
+    assert "did not parse" not in result.failure_reason, (
+        "a structural category was routed to the arithmetic path by a spurious "
+        f"assertion: {result.failure_reason}"
+    )
+    assert "both_rows_exist" in result.checks_run, result.checks_run
+    print(f"\n  assertion ignored; structural checks ran: {result.checks_run}")
+
+
+@pytest.mark.boundary_refusal
+def test_a_non_structural_category_without_an_assertion_is_refused(
+    dataset: Any, config: AppConfig
+) -> None:
+    """The other half of the dispatch. Nothing to recompute means no verdict."""
+    orphan = Hypothesis(
+        category=str(VarianceCategory.UTR_TRUNCATED_MAPPING),
+        candidate_id="x",
+        assertion=None,
+        residual_amount=None,
+        evidence_row_ids=tuple(sorted(r.batch_id for r in dataset.settlement_batches[:1])),
+        reason="no assertion offered",
+        rank=0,
+    )
+    result = verify(orphan, dataset, config)
+    assert not result.passed
+    assert "no assertion" in result.failure_reason, result.failure_reason
+    print(f"\n  {result.failure_reason[:80]}")
+
+
+def test_the_recorded_sample_was_selected_before_the_model_was_called() -> None:
+    """The rule is in code, and the manifest records the rule it ran under.
+
+    A sample chosen after seeing model output is not a sample, it is a
+    selection - and no amount of care afterwards undoes it. Asserting the
+    manifest's rule string equals the constant is what makes the ordering
+    checkable rather than merely claimed.
+    """
+    assert FIXTURE_MANIFEST.exists(), "no fixture manifest; nothing was recorded"
+    manifest = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
+    assert manifest["selection_rule"] == SELECTION_RULE, (
+        "the manifest's rule does not match the constant in eval/record_fixtures.py"
+    )
+    assert manifest["model"] == MODEL, (manifest["model"], MODEL)
+    strata = manifest["strata"]
+    assert len(strata["oracle_confirmed"]) == len(strata["oracle_rejected"]) == 20, {
+        name: len(rows) for name, rows in strata.items()
+    }
+    assert manifest["recorded"] == 40, manifest["recorded"]
+    print(
+        f"\n  40 recorded against {manifest['model']}, 20/20 stratified by an "
+        "oracle verdict computed from the data alone"
+    )
+
+
+def test_the_measured_cost_is_from_the_api_not_an_estimate() -> None:
+    """Token counts come from the response `usage`, not from prompt length."""
+    manifest = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
+    tokens_in = manifest["measured_input_tokens"]
+    tokens_out = manifest["measured_output_tokens"]
+    assert tokens_in > 0 and tokens_out > 0, (tokens_in, tokens_out)
+
+    priced = (
+        Decimal(tokens_in) * Decimal(manifest["pricing_usd_per_mtok"]["input"])
+        + Decimal(tokens_out) * Decimal(manifest["pricing_usd_per_mtok"]["output"])
+    ) / Decimal(1_000_000)
+    assert abs(priced - Decimal(manifest["measured_cost_usd"])) < Decimal("0.000001"), (
+        "the recorded cost is not the arithmetic of the recorded tokens and prices"
+    )
+    print(
+        f"\n  {tokens_in:,} in / {tokens_out:,} out -> "
+        f"${manifest['measured_cost_usd']} = Rs {manifest['measured_cost_inr']}"
+    )
+
+
+def test_the_real_model_sample_has_zero_false_confirms() -> None:
+    """THE BAR, against REAL model output rather than a synthetic adversary.
+
+    An adversary that is wrong by construction is a weak demonstration. This is
+    a model that nominated a row it chose, on evidence it read, and the
+    verifier still confirmed nothing truth disagrees with.
+    """
+    assert REAL_SAMPLE.exists(), "no scored sample; run `eval.record_fixtures --score`"
+    totals = json.loads(REAL_SAMPLE.read_text(encoding="utf-8"))["totals"]
+
+    assert totals["false_confirms"] == 0, (
+        f"{totals['false_confirms']} false confirms on real model output"
+    )
+    assert totals["decisions"] == 40, totals["decisions"]
+    assert totals["model_gave_a_hypothesis"] == 40, (
+        "the model produced no parseable hypothesis for some decisions"
+    )
+    assert totals["nominated_a_real_row"] == 40, (
+        "the model nominated something that is not one of the two rows - the "
+        "prompt does not state what candidate_id means"
+    )
+    print(
+        f"\n  {totals['decisions']} real decisions: "
+        f"{totals['verifier_confirmed_model']} confirmed, "
+        f"{totals['decisions'] - totals['verifier_confirmed_model']} rejected, "
+        f"{totals['false_confirms']} false confirms"
+    )
+
+
+def test_the_model_matches_the_oracle_on_the_confirmable_subset() -> None:
+    """The interesting line: it cannot beat the oracle, and here it ties.
+
+    The verifier confirms the same COUNT for both, and on the confirmable
+    stratum every decisive nomination was correct. Where the evidence exists,
+    the model found it; where it does not, both are rejected.
+    """
+    totals = json.loads(REAL_SAMPLE.read_text(encoding="utf-8"))["totals"]
+    assert totals["verifier_confirmed_model"] <= totals["verifier_confirmed_oracle"], (
+        "the model was confirmed MORE often than a perfect nominator, which is "
+        "impossible unless the verifier is not checking the nomination"
+    )
+    assert totals["model_nominated_correctly_confirmable"] == totals["confirmable_stratum"], (
+        f"{totals['model_nominated_correctly_confirmable']}/"
+        f"{totals['confirmable_stratum']} correct on the confirmable stratum"
+    )
+    print(
+        f"\n  confirmed: model {totals['verifier_confirmed_model']} vs oracle "
+        f"{totals['verifier_confirmed_oracle']}; confirmable stratum "
+        f"{totals['model_nominated_correctly_confirmable']}/{totals['confirmable_stratum']}"
+    )
+
+
+def test_ranked_hypotheses_earn_their_keep() -> None:
+    """SDD 4.4's "up to 3, first pass wins" is doing real work here.
+
+    The model's TOP-RANKED guess is correct less often than the nomination the
+    verifier ultimately acted on - because it tries rank 0, 1, 2 in order and
+    rejects the ones that do not check out. If those two numbers were equal the
+    ranking would be decoration.
+    """
+    totals = json.loads(REAL_SAMPLE.read_text(encoding="utf-8"))["totals"]
+    decisive = totals["model_nominated_correctly"]
+    top = totals["top_ranked_was_correct"]
+    assert decisive >= top, (decisive, top)
+    assert decisive > top, (
+        f"the decisive nomination ({decisive}) is never better than the top-ranked "
+        f"one ({top}), so verifying in rank order buys nothing on this sample"
+    )
+    print(f"\n  top-ranked correct {top}/40; decisive nomination correct {decisive}/40")

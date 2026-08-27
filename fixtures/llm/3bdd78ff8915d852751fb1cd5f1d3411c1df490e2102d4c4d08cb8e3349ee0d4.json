@@ -1,0 +1,52 @@
+{
+  "prompt": "You are reconciling merchant settlement data. Decide nothing; propose\nat most three ranked hypotheses that a deterministic verifier will\ncheck against the data without your help.\n\nEXCEPTION dup-ORD_8A01982154F9-ORD_BAC2A053824F\n  category   DUPLICATE_CANDIDATE\n  amount     47202.85\n  reason     customer CUST-PROFILE_C-00016 has 2 orders at 47202.85: ORD_8A01982154F9, ORD_BAC2A053824F. A data duplicate and a genuine repeat purchase are indistinguishable here; left for the AI layer\n  first seen day 23\n\nEVIDENCE ROWS (sorted by id):\n  ORD_8A01982154F9: LedgerRow(customer_id=CUST-PROFILE_C-00016, gross=47202.85, invoice_no=INV-C-01-000042-R014, order_date=2026-09-01, order_id=ORD_8A01982154F9, sku=SKU-CW-PANEL)\n  ORD_BAC2A053824F: LedgerRow(customer_id=CUST-PROFILE_C-00016, gross=47202.85, invoice_no=INV-C-01-000042, order_date=2026-09-01, order_id=ORD_BAC2A053824F, sku=SKU-CW-PANEL)\n\nTOLERANCE 1.00\nCALENDAR calendar_v1\n\nReturn JSON matching the tool schema. Rank best first.\n\n`candidate_id` MUST BE EXACTLY ONE of the evidence ids listed above -\nthe single row you believe is the duplicate entry. Not both, not a\nconcatenation of them, not a new identifier. A candidate_id that is not\none of those ids is rejected without being read.\n\nEvery evidence_row_id must be an id that appears above. If the rows do\nnot distinguish the candidates, say so in `reason` and return fewer\nhypotheses - a guess the verifier cannot check will be rejected.",
+  "response": {
+    "hypotheses": [
+      {
+        "assertion": {
+          "lhs": "ORD_8A01982154F9.invoice_no",
+          "op": "==",
+          "rhs": "ORD_BAC2A053824F.invoice_no"
+        },
+        "candidate_id": "ORD_BAC2A053824F",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_8A01982154F9",
+          "ORD_BAC2A053824F"
+        ],
+        "reason": "Both orders have identical invoice numbers, suggesting a potential duplicate entry. The verifier should check if the invoice number is unique to one order.",
+        "residual_amount": "0.00"
+      },
+      {
+        "assertion": {
+          "lhs": "ORD_8A01982154F9.order_date",
+          "op": "==",
+          "rhs": "ORD_BAC2A053824F.order_date"
+        },
+        "candidate_id": "ORD_8A01982154F9",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_8A01982154F9",
+          "ORD_BAC2A053824F"
+        ],
+        "reason": "Both orders have the same order date and amount, indicating a possible duplicate. The verifier should confirm if the order date is unique to one order.",
+        "residual_amount": "0.00"
+      },
+      {
+        "assertion": {
+          "lhs": "ORD_8A01982154F9.sku",
+          "op": "==",
+          "rhs": "ORD_BAC2A053824F.sku"
+        },
+        "candidate_id": "ORD_BAC2A053824F",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_8A01982154F9",
+          "ORD_BAC2A053824F"
+        ],
+        "reason": "Both orders have the same SKU, which could imply a duplicate entry. The verifier should check if the SKU is unique to one order.",
+        "residual_amount": "0.00"
+      }
+    ]
+  }
+}

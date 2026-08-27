@@ -224,9 +224,15 @@ def build_prompt(exception: Exception_, dataset: DayDataset, config: AppConfig) 
         f"TOLERANCE {config.thresholds.tolerance.verifier_rupees}",
         f"CALENDAR {config.calendar.version}",
         "",
-        "Return JSON matching the tool schema. Rank best first. Every",
-        "evidence_row_id must be an id that appears above. If the rows do not",
-        "distinguish the candidates, say so in `reason` and return fewer",
+        "Return JSON matching the tool schema. Rank best first.",
+        "",
+        "`candidate_id` MUST BE EXACTLY ONE of the evidence ids listed above -",
+        "the single row you believe is the duplicate entry. Not both, not a",
+        "concatenation of them, not a new identifier. A candidate_id that is not",
+        "one of those ids is rejected without being read.",
+        "",
+        "Every evidence_row_id must be an id that appears above. If the rows do",
+        "not distinguish the candidates, say so in `reason` and return fewer",
         "hypotheses - a guess the verifier cannot check will be rejected.",
     ]
     return "\n".join(lines)

@@ -48,6 +48,7 @@ REGISTERED_READERS = frozenset(
         "eval/run_eval_ai.py",
         "eval/bench.py",
         "eval/run_ai.py",
+        "eval/record_fixtures.py",
         "settlesense/exceptions/store.py",
         "settlesense/ai/client.py",
     }
@@ -296,6 +297,29 @@ def _run_ai_empty(tmp: Path) -> str:
     return str(caught.value)
 
 
+def _record_missing(tmp: Path) -> str:
+    """No seed_* directories: the evaluation set was never generated."""
+    from eval.record_fixtures import main
+
+    with pytest.raises(SystemExit) as caught:
+        main(["--eval-dir", str(tmp), "--dry-run"])
+    return str(caught.value)
+
+
+def _record_empty(tmp: Path) -> str:
+    """A seed_* directory that EXISTS but holds no day files.
+
+    Distinguishable from absent: it gets past the "was it generated" check and
+    fails on the empty directory, with a different message.
+    """
+    from eval.record_fixtures import main
+
+    (tmp / "seed_1000").mkdir(parents=True, exist_ok=True)
+    with pytest.raises(SystemExit) as caught:
+        main(["--eval-dir", str(tmp), "--dry-run"])
+    return str(caught.value)
+
+
 CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "settlesense/ingest.py": (_ingest_missing, lambda _tmp: _ingest_empty()),
     "settlesense/config.py": (_config_missing, _config_empty),
@@ -303,6 +327,7 @@ CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "eval/run_eval_ai.py": (_run_eval_ai_missing, _run_eval_ai_empty),
     "eval/bench.py": (_bench_missing, _bench_empty),
     "eval/run_ai.py": (_run_ai_missing, _run_ai_empty),
+    "eval/record_fixtures.py": (_record_missing, _record_empty),
     "settlesense/exceptions/store.py": (_store_missing, _store_empty),
     "settlesense/ai/client.py": (_replay_missing, _replay_empty),
 }

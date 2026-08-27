@@ -1,0 +1,52 @@
+{
+  "prompt": "You are reconciling merchant settlement data. Decide nothing; propose\nat most three ranked hypotheses that a deterministic verifier will\ncheck against the data without your help.\n\nEXCEPTION dup-ORD_23FCD3538499-ORD_FEDEDED6F093\n  category   DUPLICATE_CANDIDATE\n  amount     48448.15\n  reason     customer CUST-PROFILE_C-00305 has 2 orders at 48448.15: ORD_23FCD3538499, ORD_FEDEDED6F093. A data duplicate and a genuine repeat purchase are indistinguishable here; left for the AI layer\n  first seen day 24\n\nEVIDENCE ROWS (sorted by id):\n  ORD_23FCD3538499: LedgerRow(customer_id=CUST-PROFILE_C-00305, gross=48448.15, invoice_no=INV-C-12-000018-R008, order_date=2026-09-12, order_id=ORD_23FCD3538499, sku=SKU-CW-INVERTER)\n  ORD_FEDEDED6F093: LedgerRow(customer_id=CUST-PROFILE_C-00305, gross=48448.15, invoice_no=INV-C-12-000018, order_date=2026-09-12, order_id=ORD_FEDEDED6F093, sku=SKU-CW-INVERTER)\n\nTOLERANCE 1.00\nCALENDAR calendar_v1\n\nReturn JSON matching the tool schema. Rank best first.\n\n`candidate_id` MUST BE EXACTLY ONE of the evidence ids listed above -\nthe single row you believe is the duplicate entry. Not both, not a\nconcatenation of them, not a new identifier. A candidate_id that is not\none of those ids is rejected without being read.\n\nEvery evidence_row_id must be an id that appears above. If the rows do\nnot distinguish the candidates, say so in `reason` and return fewer\nhypotheses - a guess the verifier cannot check will be rejected.",
+  "response": {
+    "hypotheses": [
+      {
+        "assertion": {
+          "lhs": "ORD_23FCD3538499.invoice_no",
+          "op": "==",
+          "rhs": "ORD_FEDEDED6F093.invoice_no"
+        },
+        "candidate_id": "ORD_FEDEDED6F093",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_23FCD3538499",
+          "ORD_FEDEDED6F093"
+        ],
+        "reason": "Both orders have identical invoice numbers, suggesting ORD_FEDEDED6F093 might be a duplicate entry.",
+        "residual_amount": "0.00"
+      },
+      {
+        "assertion": {
+          "lhs": "ORD_23FCD3538499.order_date",
+          "op": "==",
+          "rhs": "ORD_FEDEDED6F093.order_date"
+        },
+        "candidate_id": "ORD_23FCD3538499",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_23FCD3538499",
+          "ORD_FEDEDED6F093"
+        ],
+        "reason": "Both orders have the same order date, but ORD_23FCD3538499 has a more specific invoice number, suggesting it might be the original entry.",
+        "residual_amount": "0.00"
+      },
+      {
+        "assertion": {
+          "lhs": "ORD_23FCD3538499.sku",
+          "op": "==",
+          "rhs": "ORD_FEDEDED6F093.sku"
+        },
+        "candidate_id": "ORD_23FCD3538499",
+        "category": "UNEXPLAINED",
+        "evidence_row_ids": [
+          "ORD_23FCD3538499",
+          "ORD_FEDEDED6F093"
+        ],
+        "reason": "The SKU is identical for both orders, but without further distinguishing data, it's unclear which is a duplicate.",
+        "residual_amount": "0.00"
+      }
+    ]
+  }
+}

@@ -11,13 +11,22 @@ TWO RULES, both enforced at construction rather than by convention:
   must be incapable of billing anyone, and "we only construct it in production"
   is a property of call sites rather than of the type.
 
-DETERMINISM SETTINGS ARE NOT OPTIONAL. temperature=0, top_p=1, and a pinned
-model string. A sampled model makes the same prompt produce different
-hypotheses on two runs, so a golden comparison would fail for reasons nobody
-could reproduce - and the whole project rests on same-input-same-output. The
-model string is pinned rather than aliased ("latest") for the same reason: an
-alias silently repoints and the run stops being reproducible without a single
-line changing.
+DETERMINISM COMES FROM THE REPLAY CACHE, NOT FROM THE PROVIDER. This is the
+single most important sentence in this module. `temperature=0`, `top_p=1` and
+`seed=` reduce variation; NONE of them guarantees it. OpenAI documents `seed`
+as BEST EFFORT and pairs it with a `system_fingerprint` that changes when the
+backend changes. So the reproducibility this project claims comes from
+`fixtures/llm/<sha256(prompt)>.json` - a recorded response replayed byte for
+byte - and the provider settings below are there to make a RECORDING SESSION
+less noisy, not to make the provider deterministic.
+
+Nobody should later read `seed=` as a reproducibility claim. If the fixtures
+are deleted, the guarantee is gone; re-recording produces a new fixture set,
+not the old one.
+
+THE MODEL STRING IS PINNED TO A DATED SNAPSHOT. "gpt-4o" is an alias that
+moves; "gpt-4o-2024-08-06" does not. An alias silently repoints and a recorded
+fixture becomes unreproducible without a line of this repo changing.
 """
 
 from __future__ import annotations
@@ -42,19 +51,28 @@ __all__ = [
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent.parent / "fixtures" / "llm"
 
-MODEL = "claude-sonnet-5"
-"""The model string, recorded in every fixture so a run is attributable.
+MODEL = "gpt-4o-2024-08-06"
+"""A DATED SNAPSHOT, never a moving alias.
 
-NEVER a "-latest" style alias: an alias silently repoints and the run stops
-being reproducible without a line of this repo changing - the same failure as
-a floating dependency, in the one place the project can least afford it. If a
-dated variant of this model is published, pin that instead; the fixture set
-would then need re-recording, which is the point.
+`gpt-4o` repoints as OpenAI ships new versions; `gpt-4o-2024-08-06` does not.
+A fixture recorded against an alias cannot be reproduced later, because the
+thing that produced it no longer exists under that name. Changing this string
+invalidates the fixture set, and that is the intended consequence.
 """
 
 TEMPERATURE = 0
 TOP_P = 1
-MAX_TOKENS = 1024
+SEED = 42
+"""Passed to the API, and NOT a determinism guarantee.
+
+OpenAI documents `seed` as best-effort and returns a `system_fingerprint` that
+changes when the backend does. It reduces variation within a recording session;
+it does not make the provider reproducible. The replay cache does that.
+"""
+
+MAX_TOKENS = 4096
+
+API_KEY_VARIABLE = "OPENAI_API_KEY"
 
 
 def prompt_hash(prompt: str) -> str:
@@ -129,7 +147,12 @@ def record_fixture(prompt: str, response: dict[str, Any], fixture_dir: Path = FI
 
 
 class RealLLMClient:
-    """The live client. REFUSES to exist inside a test run (D7)."""
+    """The live OpenAI client. REFUSES to exist inside a test run (D7).
+
+    Used ONLY while recording fixtures. Every other path in this project -
+    tests, eval, the bench - goes through ReplayLLMClient and never has a
+    network. The provider exists during recording and nowhere else.
+    """
 
     def __init__(self, model: str = MODEL, api_key: str | None = None) -> None:
         if os.environ.get("PYTEST_CURRENT_TEST"):
@@ -140,32 +163,59 @@ class RealLLMClient:
                 "type rather than of who remembered to check."
             )
         self.model = model
-        self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        self._api_key = api_key or os.environ.get(API_KEY_VARIABLE)
         if not self._api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY is not set")
+            raise RuntimeError(
+                f"{API_KEY_VARIABLE} is not set. Recording fixtures needs a live "
+                "OpenAI key; everything else in this project runs from "
+                "fixtures/llm/ and needs no key at all."
+            )
+        self.last_usage: dict[str, int] = {}
+        """Token counts from the most recent call. MEASURED, never estimated.
+
+        Populated from the API response so a cost figure is arithmetic on real
+        counts rather than an assumption about prompt length.
+        """
 
     def complete(  # pragma: no cover - needs network, never runs in the suite
         self, prompt: str, schema: dict[str, Any]
     ) -> dict[str, Any]:
-        from anthropic import Anthropic
+        """One structured completion.
 
-        client = Anthropic(api_key=self._api_key)
-        message = client.messages.create(  # type: ignore[call-overload]
+        The JSON schema is enforced PROVIDER-SIDE via `json_schema` response
+        format AND locally by `hypothesis.parse_hypotheses`. The provider-side
+        check is a convenience that saves a retry; it is not a guarantee, and
+        the local validator is what the pipeline actually relies on. A response
+        that satisfied the provider and not us is discarded either way.
+        """
+        from openai import OpenAI
+
+        client = OpenAI(api_key=self._api_key)
+        response = client.chat.completions.create(
             model=self.model,
-            max_tokens=MAX_TOKENS,
             temperature=TEMPERATURE,
             top_p=TOP_P,
-            tools=[
-                {
-                    "name": "emit_hypotheses",
-                    "description": "Return ranked hypotheses for this exception.",
-                    "input_schema": schema,
-                }
-            ],
-            tool_choice={"type": "tool", "name": "emit_hypotheses"},
+            seed=SEED,  # best-effort; see the module docstring
+            max_tokens=MAX_TOKENS,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "hypotheses",
+                    "strict": False,
+                    "schema": schema,
+                },
+            },
             messages=[{"role": "user", "content": prompt}],
         )
-        for block in message.content:
-            if block.type == "tool_use":
-                return dict(block.input)
-        raise RuntimeError("the model returned no tool_use block")
+        usage = response.usage
+        self.last_usage = {
+            "input_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+            "output_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+        }
+        content = response.choices[0].message.content
+        if not content:
+            raise RuntimeError("the model returned an empty message")
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            raise RuntimeError(f"expected a JSON object, got {type(parsed).__name__}")
+        return parsed

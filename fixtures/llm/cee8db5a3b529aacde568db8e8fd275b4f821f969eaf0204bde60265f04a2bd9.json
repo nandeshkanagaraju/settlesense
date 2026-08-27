@@ -1,0 +1,52 @@
+{
+  "prompt": "You are reconciling merchant settlement data. Decide nothing; propose\nat most three ranked hypotheses that a deterministic verifier will\ncheck against the data without your help.\n\nEXCEPTION dup-ORD_0F6D194AB46B-ORD_18A752F5AF1A\n  category   DUPLICATE_CANDIDATE\n  amount     21831.75\n  reason     customer CUST-PROFILE_A-00406 has 2 orders at 21831.75: ORD_0F6D194AB46B, ORD_18A752F5AF1A. A data duplicate and a genuine repeat purchase are indistinguishable here; left for the AI layer\n  first seen day 24\n\nEVIDENCE ROWS (sorted by id):\n  ORD_0F6D194AB46B: LedgerRow(customer_id=CUST-PROFILE_A-00406, gross=21831.75, invoice_no=INV-A-06-000023-R021, order_date=2026-09-06, order_id=ORD_0F6D194AB46B, sku=SKU-AR-LINEN)\n  ORD_18A752F5AF1A: LedgerRow(customer_id=CUST-PROFILE_A-00406, gross=21831.75, invoice_no=INV-A-06-000023, order_date=2026-09-06, order_id=ORD_18A752F5AF1A, sku=SKU-AR-LINEN)\n\nTOLERANCE 1.00\nCALENDAR calendar_v1\n\nReturn JSON matching the tool schema. Rank best first.\n\n`candidate_id` MUST BE EXACTLY ONE of the evidence ids listed above -\nthe single row you believe is the duplicate entry. Not both, not a\nconcatenation of them, not a new identifier. A candidate_id that is not\none of those ids is rejected without being read.\n\nEvery evidence_row_id must be an id that appears above. If the rows do\nnot distinguish the candidates, say so in `reason` and return fewer\nhypotheses - a guess the verifier cannot check will be rejected.",
+  "response": {
+    "hypotheses": [
+      {
+        "assertion": {
+          "lhs": "ORD_0F6D194AB46B",
+          "op": "==",
+          "rhs": "ORD_18A752F5AF1A"
+        },
+        "candidate_id": "ORD_0F6D194AB46B",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_0F6D194AB46B",
+          "ORD_18A752F5AF1A"
+        ],
+        "reason": "Both orders have identical amounts, dates, and SKUs. However, the invoice number for ORD_0F6D194AB46B includes an additional suffix '-R021', suggesting it might be a duplicate or a revised entry.",
+        "residual_amount": "0.00"
+      },
+      {
+        "assertion": {
+          "lhs": "ORD_18A752F5AF1A",
+          "op": "==",
+          "rhs": "ORD_0F6D194AB46B"
+        },
+        "candidate_id": "ORD_18A752F5AF1A",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_0F6D194AB46B",
+          "ORD_18A752F5AF1A"
+        ],
+        "reason": "Both orders have identical amounts, dates, and SKUs. However, the invoice number for ORD_18A752F5AF1A lacks the '-R021' suffix, suggesting it might be the original entry, with ORD_0F6D194AB46B being a duplicate or revised entry.",
+        "residual_amount": "0.00"
+      },
+      {
+        "assertion": {
+          "lhs": "ORD_0F6D194AB46B",
+          "op": "!=",
+          "rhs": "ORD_18A752F5AF1A"
+        },
+        "candidate_id": "ORD_0F6D194AB46B",
+        "category": "DUPLICATE_CANDIDATE",
+        "evidence_row_ids": [
+          "ORD_0F6D194AB46B",
+          "ORD_18A752F5AF1A"
+        ],
+        "reason": "The evidence rows do not provide enough distinguishing information to definitively identify a duplicate. The invoice number discrepancy could indicate a revision or a genuine repeat purchase.",
+        "residual_amount": "0.00"
+      }
+    ]
+  }
+}
