@@ -2,6 +2,40 @@
 
 What this project does not establish, stated before anyone has to ask.
 
+## The engine mislabels split settlements, and nothing was changed about it
+
+The held-out set (seed 999) was run once, after M8, and produced **52 false
+matches** — a residual false-match rate of **1.0456%** against PDD 7.3's **1%**
+budget, and **₹897,396.86** of gross exposure against a **₹500** budget. The dev
+set produced zero of both.
+
+**All 52 are `split_settlement`**, one of the two noise types withheld from
+engine development. The failure mode is worse than missing them: the engine
+CONFIRMS them under a plausible wrong category — `T_PLUS_N_TIMING` 48 times and
+`PARTIAL_CAPTURE` 4 times. A payment spread across two batches does settle late
+and does settle partially, so each wrong answer is locally consistent with the
+evidence in front of it. There was no `SPLIT_SETTLEMENT` rule to reach for, so
+it reached for the nearest rule it had.
+
+**Nothing was adjusted in response.** No threshold, no tolerance, no weight, no
+new rule. Tuning after seeing held-out results is how a held-out set stops being
+held out, and a 1.0456% that became 0.9% by hand would be a worse number than
+the one recorded here. The breach stands in the README as measured.
+
+**What this changes about every other number in this project.** The dev set's
+`0.000000` false-match rate should be read as *zero on noise the engine was
+built against*. It is not a generalisation claim, and the holdout is the only
+figure here that carries one. Population B and C both IMPROVED on unseen data —
+batch link rate 0.949 → 0.974, noise recovery 0.882 → 0.950, Population C
+perfect on both — so the failure is specific to one unseen category rather than
+a broad collapse.
+
+**What would fix it, and why it is not done here.** A `SPLIT_SETTLEMENT` pass —
+subset-sum over settlement lines against a payment's expected total — is the
+obvious rule, and PDD 6.2 anticipates exactly this migration. Building it now
+would be tuning against the holdout. It belongs in a version whose evaluation
+uses a seed nobody has looked at.
+
 ## The duplicate-pair task is fingerprinted, and the fingerprint is worthless
 
 **Every injected duplicate carries an `-R###` suffix on its invoice number.**

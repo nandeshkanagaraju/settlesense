@@ -430,7 +430,11 @@ def test_the_committed_page_and_screenshots_exist() -> None:
     assert page.exists(), "reports/ui/queue.html is not committed"
     assert page.stat().st_size > 20_000, page.stat().st_size
     for shot in ("evidence-queue.png", "evidence-panel.png"):
-        image = REPO / "docs" / shot
+        # In reports/ui/, not docs/: they are GENERATED artifacts and belong
+        # beside the page they were captured from. A new top-level directory
+        # would also need declaring in SDD section 2, and a screenshot folder
+        # is not a design decision worth a spec revision.
+        image = REPO / "reports" / "ui" / shot
         assert image.exists(), f"docs/{shot} is missing"
         assert image.stat().st_size > 50_000, (shot, image.stat().st_size)
     print("\n  queue.html and both screenshots are present")

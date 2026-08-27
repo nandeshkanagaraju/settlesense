@@ -1,0 +1,88 @@
+{
+  "analyst_time": {
+    "ai_confirmed_residuals": 0,
+    "deterministic_resolutions": 4973,
+    "label": "derived estimate, assumes 4 min/review; attributed separately to rules and to AI, never blended",
+    "minutes_per_review_assumption": 4,
+    "minutes_saved_ai_derived_estimate": 0,
+    "minutes_saved_deterministic_derived_estimate": 19892
+  },
+  "as_of": "2026-11-30",
+  "baselines": {
+    "deterministic_only": {
+      "batch_count": 39,
+      "batches_linked": 38,
+      "false_links": 0,
+      "note": "P1-P9, no model calls"
+    },
+    "llm_only": {
+      "note": "requires a recorded fixture set or --allow-network; not run by default. See eval/baselines/llm_only.py for what was done to make this baseline strong.",
+      "skipped": true
+    },
+    "naive": {
+      "batch_amount_uniqueness": "1.000000",
+      "batches_linked": 33,
+      "false_links": 0,
+      "note": "amount + date window only; no identifiers of any kind"
+    },
+    "settlesense": {
+      "batch_count": 39,
+      "batches_linked": 38,
+      "false_links": 0,
+      "note": "identical to deterministic_only until M7 lands; reported anyway so the AI contribution is visible as a delta later"
+    }
+  },
+  "batch_status_counts": {
+    "CONFIRMED": 38,
+    "OPEN": 1
+  },
+  "calendar_version": "calendar_v1",
+  "case_status_counts": {
+    "CONFIRMED": 4973,
+    "OPEN": 54
+  },
+  "config_hash": "12e9a009b59251d8",
+  "population_a_case_count_denominator": {
+    "case_count": 5027,
+    "case_match_rate_case_count": "0.989258",
+    "confirmed_case_count": 4973,
+    "deterministic_residual_count": 54,
+    "evidence_coverage_case_count": "1.000000",
+    "expected_net_cash_reconciled_expected_net": "71043122.01",
+    "gross_exposure_false_match_value_expected_gross": "897396.86",
+    "gross_exposure_match_rate_expected_gross": "0.988725",
+    "gross_exposure_matched_expected_gross": "76581681.50",
+    "gross_exposure_total_expected_gross": "77454979.46",
+    "residual_abstention_rate_case_count": "0.010742",
+    "residual_explanation_precision_case_count": null,
+    "residual_false_match_rate_case_count": "0.010456",
+    "unresolved_expected_net_cash_expected_net": "807270.62"
+  },
+  "population_b_batch_count_denominator": {
+    "batch_count": 39,
+    "batch_false_link_rate_batch_count": "0.000000",
+    "batch_link_rate_batch_count": "0.974359",
+    "batch_net_false_link_value_batch_net_total": "0.00",
+    "batch_net_linked_value_batch_net_total": "71509298.36",
+    "batch_net_total_batch_net_total": "71850392.62",
+    "category_precision_on_unresolved_batch_count": "1.000000",
+    "defect_batches_excluded": [],
+    "false_link_count": 0,
+    "injected_noise_batch_count": 20,
+    "injected_noise_recovered_batch_count": 19,
+    "linked_count": 38,
+    "noise_recovery_rate_counting_defect": "0.950000",
+    "noise_recovery_rate_excluding_defect": "0.950000",
+    "unresolved_batch_count": 1
+  },
+  "population_c_row_count_denominator": {
+    "matched_row_count": 26,
+    "row_count": 26,
+    "row_variance_precision_row_count": "1.000000",
+    "row_variance_recall_row_count": "1.000000",
+    "row_variance_value_row_value": "1272130.66",
+    "truth_row_count": 26
+  },
+  "residual_set_sentence": "Of the 54 exceptions the deterministic engine could not resolve, the verified hypothesis loop correctly explained 0, abstained on 54, and false-matched 0.",
+  "seed": 999
+}

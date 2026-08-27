@@ -74,7 +74,7 @@ Read-only over the state DB. Three populations in one table with the population
 named per row, sorted by amount, and a **Verified by** column that carries the
 whole thesis at a glance.
 
-![Evidence queue](docs/evidence-queue.png)
+![Evidence queue](reports/ui/evidence-queue.png)
 
 **283 of 339 tracked exceptions say DETERMINISTIC.** The residual sequence
 **3 → 6 → 2** rises before it falls, and the page says why rather than leaving
@@ -83,7 +83,7 @@ delivers batches whose credit is still days away.
 
 Every row expands into the full evidence, in the order a reviewer needs it:
 
-![Evidence panel](docs/evidence-panel.png)
+![Evidence panel](reports/ui/evidence-panel.png)
 
 That is one real duplicate pair. The money trail follows **both** halves
 end to end (ledger → payment → settlement → batch → bank, identical on both
@@ -235,10 +235,78 @@ against PDD 7.3's ₹50 ceiling.
 
 ### Held-out set — seed 999 (`make eval-holdout`)
 
-**NOT YET RUN.** Reserved for a single run at the end, after M7. Whatever it
-prints is what gets recorded here, including if it is worse. It also carries
-the two withheld noise types (`garbled_narration`, `split_settlement`), which
-the engine has never seen.
+**RUN ONCE, on 2026-08-27, after M8. Nothing was adjusted afterwards** — not a
+threshold, not a tolerance, not a weight. Full artifact:
+[`reports/eval-holdout/results.md`](reports/eval-holdout/results.md).
+
+`as_of=2026-11-30` · `calendar_v1` · `config_hash=12e9a009b59251d8`
+
+| Population A — `ReconciliationCase` (n=5,027) | Holdout 999 | Dev 42 |
+|---|---|---|
+| Case match rate | **0.989258** | 0.989654 |
+| Deterministic residual | **54** | 52 |
+| **Residual false-match rate** | **0.010456** | **0.000000** |
+| **Gross-exposure false-match value** | **₹897,396.86** | **₹0.00** |
+| Gross-exposure match rate | 0.988725 | 0.989100 |
+| Expected-net cash reconciled | ₹71,043,122.01 | ₹72,204,883.74 |
+| Unresolved expected-net cash | ₹807,270.62 | ₹800,722.94 |
+| Evidence coverage | 1.000000 | 1.000000 |
+
+| Population B — batch↔bank links (n=39 batches) | Holdout 999 | Dev 42 |
+|---|---|---|
+| Batch link rate | **0.974359** (38/39) | 0.948718 (37/39) |
+| Batch false-link rate | **0.000000** | 0.000000 |
+| Injected noise recovered | 19/20 · 0.950000 | 15/17 · 0.882353 |
+| Unresolved batches | 1 | 2 |
+| Category precision on unresolved | 1.000000 | 1.000000 |
+
+| Population C — row-grain variances (n=26 rows) | Holdout 999 | Dev 42 |
+|---|---|---|
+| Row variances found / in truth | **26 / 26** | 29 / 29 |
+| Recall | **1.000000** | 1.000000 |
+| Precision | **1.000000** | 1.000000 |
+| Value | ₹1,272,130.66 | ₹1,330,088.02 |
+
+| Baseline | Linked | False links |
+|---|---:|---:|
+| `naive` | 33 | 0 |
+| `deterministic_only` | 38 | 0 |
+| `settlesense` | 38 | 0 |
+| `llm_only` | — | — (no fixture set for this seed) |
+
+**Throughput:** the whole target — ingest, engine, all baselines, report writing,
+interpreter start — took **0.861 s wall clock** for 5,027 cases, about **5,800
+cases/s end to end**. That is a single untimed-by-design run and is *not*
+comparable to the bench's median-of-three, which excludes baselines and report
+writing and is measured on the dev seed because `make bench` must never touch
+the holdout.
+
+#### The disagreement, which is the finding
+
+**Population B and C got BETTER on unseen data.** Batch link rate rose to
+0.974 from 0.949, noise recovery to 0.950 from 0.882, and Population C stayed
+at perfect recall and precision. Zero false links.
+
+**Population A produced 52 false matches where dev produced none**, breaching
+PDD 7.3's 1% budget at **1.0456%** and **₹897,396.86** of gross exposure.
+
+Every one of the 52 is `split_settlement` — **one of the two noise types
+deliberately withheld from engine development.** The engine does not merely
+miss them; it confirms them with a *plausible wrong* category:
+
+| Engine said | Truth said | Count |
+|---|---|---:|
+| `T_PLUS_N_TIMING` | `SPLIT_SETTLEMENT` | 48 |
+| `PARTIAL_CAPTURE` | `SPLIT_SETTLEMENT` | 4 |
+
+A payment split across two batches settles late and settles partially, so both
+wrong answers are locally consistent with the evidence. The engine had no
+`SPLIT_SETTLEMENT` rule to reach for and reached for the nearest one it had.
+
+**This is what the withheld types are for, and it is a real generalisation
+failure, reported unadjusted.** Nothing was changed in response to it — see
+[LIMITATIONS.md](LIMITATIONS.md). The honest reading of the dev set's
+0.000000 false-match rate is now: *on noise the engine was built against*.
 
 ---
 

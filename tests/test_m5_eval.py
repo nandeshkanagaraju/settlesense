@@ -958,29 +958,65 @@ def test_25b_the_readme_cross_check_can_actually_fail() -> None:
 
 
 @pytest.mark.hygiene
-def test_25c_the_holdout_has_no_numbers_in_the_readme_yet() -> None:
-    """The holdout is run ONCE. Until then the README must say so.
+def test_25c_the_holdout_was_run_once_and_its_numbers_are_recorded() -> None:
+    """The holdout HAS now been run. This test guards the other half of the rule.
 
-    A holdout figure appearing before the single run is the exact failure the
-    discipline exists to prevent, and it is silent: a plausible number in a
-    table looks identical whether it was run once or thirty times. The holdout
-    is also the only one of the three sets with this rule - the dev set and
-    the AI evaluation set may both be re-run freely.
+    It previously asserted the README said NOT YET RUN and that no artifact was
+    tracked. That was the right guard until 2026-08-27, when the single run
+    happened; keeping it would have forced a choice between a stale README and
+    a failing suite.
+
+    What it guards now: the numbers are recorded, the artifact is committed so
+    they are checkable rather than trusted, and the README says plainly that
+    nothing was adjusted afterwards. A holdout figure that could be quietly
+    improved after the fact is not a holdout figure.
     """
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    start = readme.index("### Held-out set")
-    section = readme[start : readme.index("---", start)]
-    assert "NOT YET RUN" in section, "the holdout section no longer declares itself unrun"
+    results = REPO / "reports" / "eval-holdout" / "results.json"
+    assert results.exists(), "the holdout was run but its artifact is not committed"
+    payload = json.loads(results.read_text(encoding="utf-8"))
+    assert payload["seed"] == 999, payload["seed"]
 
-    tracked = subprocess.run(
-        ["git", "ls-files", "reports/eval-holdout"],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    assert not tracked, f"held-out results are committed before the final run: {tracked}"
-    print("\n  holdout: declared NOT YET RUN, no committed artifact")
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    section = readme[readme.index("### Held-out set") :]
+    assert "NOT YET RUN" not in section, "the README still claims the holdout is unrun"
+    assert "RUN ONCE" in section, "the README does not state it was a single run"
+    assert "Nothing was adjusted afterwards" in section, (
+        "the README does not state that nothing was tuned in response"
+    )
+
+    # THE DISAGREEMENT MUST BE REPORTED, not smoothed. The holdout produced a
+    # false-match rate the dev set did not, and a README that quoted only the
+    # favourable figures would be the exact failure this discipline exists to
+    # prevent.
+    pop_a = payload["population_a_case_count_denominator"]
+    rate = Decimal(pop_a["residual_false_match_rate_case_count"])
+    assert rate > 0, "this test assumes the holdout disagreed; it no longer does"
+    assert pop_a["residual_false_match_rate_case_count"] in section, (
+        f"the README does not quote the holdout false-match rate {rate}"
+    )
+    assert "split_settlement" in section.lower(), (
+        "the README does not name the withheld noise type responsible"
+    )
+    print(
+        f"\n  holdout seed {payload['seed']}: false-match rate {rate}, "
+        f"residual {pop_a['deterministic_residual_count']}, quoted in the README"
+    )
+
+
+@pytest.mark.hygiene
+def test_25c2_the_holdout_breach_is_recorded_in_limitations() -> None:
+    """A budget breach that lives only in a results table is a breach nobody reads.
+
+    PDD 7.3 sets the residual false-match budget at 1%. The holdout returned
+    1.0456%. That belongs in LIMITATIONS.md with what was NOT done about it.
+    """
+    limitations = (REPO / "LIMITATIONS.md").read_text(encoding="utf-8")
+    assert "1.0456" in limitations, "the breached rate is not recorded"
+    assert "Nothing was adjusted in response" in limitations, (
+        "LIMITATIONS does not state that nothing was tuned after the holdout"
+    )
+    assert "SPLIT_SETTLEMENT" in limitations
+    print("\n  the breach and the decision not to tune are both recorded")
 
 
 @pytest.mark.hygiene

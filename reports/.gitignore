@@ -11,12 +11,19 @@
 #
 # It is 3KB and deterministic: same seed, same config, same bytes.
 #
-# reports/eval-holdout/ is NOT unignored. It is written once, at the end, and
-# its numbers are transcribed into the README by hand in that same commit.
+# reports/eval-holdout/ IS committed, and this comment previously said it would
+# not be. Changed deliberately: every other quoted number in this project has an
+# artifact behind it (results.json, bench.md, ai_loop.json), and a holdout figure
+# is the one number that most needs to be checkable rather than trusted. It is
+# written once and never regenerated.
 !eval/
 eval/*
 !eval/results.json
 !eval/results.md
+!eval-holdout/
+eval-holdout/*
+!eval-holdout/results.json
+!eval-holdout/results.md
 
 # bench.md is committed for the same reason: the README quotes its throughput
 # figures, and the machine spec in its header is what makes them a measurement
@@ -38,3 +45,5 @@ ai/*
 !ui/
 ui/*
 !ui/queue.html
+!ui/evidence-queue.png
+!ui/evidence-panel.png
