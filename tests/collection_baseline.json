@@ -17,7 +17,7 @@
     "tests/test_m3_matching.py": 78,
     "tests/test_m4_fuzzy.py": 31,
     "tests/test_m4_fuzzy_utr.py": 25,
-    "tests/test_m5_eval.py": 35,
+    "tests/test_m5_eval.py": 39,
     "tests/test_narration_composition.py": 20,
     "tests/test_no_float_decisions.py": 18,
     "tests/test_noise_coverage.py": 36,
@@ -32,5 +32,5 @@
     "tests/test_types_money.py": 33,
     "tests/test_verbosity_honoured.py": 8
   },
-  "total": 823
+  "total": 827
 }

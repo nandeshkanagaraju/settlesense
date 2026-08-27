@@ -1,2 +1,19 @@
+# Reports are generated. Almost all of them are scratch and stay out of the
+# repo.
 *
 !.gitignore
+
+# EXCEPT the dev-set evaluation result, which IS committed. The README quotes
+# these numbers, and a quoted number with no artifact behind it is a claim
+# nobody can check. tests/test_m5_eval.py compares a live run against this
+# file, so a regression shows up as a diff rather than as a README that
+# quietly stopped being true.
+#
+# It is 3KB and deterministic: same seed, same config, same bytes.
+#
+# reports/eval-holdout/ is NOT unignored. It is written once, at the end, and
+# its numbers are transcribed into the README by hand in that same commit.
+!eval/
+eval/*
+!eval/results.json
+!eval/results.md

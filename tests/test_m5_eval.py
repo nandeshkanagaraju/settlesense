@@ -801,3 +801,193 @@ def test_23b_the_runner_writes_both_artifacts(tmp_path: Path) -> None:
     assert (tmp_path / "results.json").exists()
     assert (tmp_path / "results.md").exists()
     assert_no_ambiguous_money_keys(json.loads((tmp_path / "results.json").read_text()))
+
+
+# --------------------------------------------------------------------------
+# Beyond the brief: the README quotes numbers. Nothing checked them.
+#
+# Every figure in the README Results section was typed by hand from a run.
+# That is the weakest link in the whole project: the engine can be correct,
+# the metrics correct, the artifact correct, and the README still say
+# something else - and a green suite would never notice, because no test read
+# the README. A wrong number in the one file a reader actually reads is worse
+# than a wrong number anywhere in the codebase.
+# --------------------------------------------------------------------------
+
+COMMITTED_RESULTS = REPO / "reports" / "eval" / "results.json"
+
+
+def _flatten_readme_number(text: str) -> str:
+    """README prose formatting -> comparable digits.
+
+    The README writes money for humans (`₹72,204,883.74`) and the artifact
+    writes it for machines (`72204883.74`). Only the separators differ, so
+    they are stripped rather than the comparison being loosened.
+    """
+    text = text.replace("₹", "").replace("**", "").replace("`", "")
+    return re.sub(r"(?<=\d),(?=\d{3})", "", text)
+
+
+def _readme_dev_section(readme: str) -> str:
+    """The dev-set block only.
+
+    Bounded deliberately: a number found anywhere in a 200-line README proves
+    nothing about the table it was supposed to be in.
+    """
+    start = readme.index("### Dev set")
+    end = readme.index("### Held-out set")
+    return readme[start:end]
+
+
+def _readme_expectations(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """(README label, value the artifact says it must quote).
+
+    Built from the payload, never from literals - a hard-coded expectation
+    would still pass after the engine changed, which is the failure this whole
+    test exists to catch.
+    """
+    pop_a = payload["population_a_case_count_denominator"]
+    pop_b = payload["population_b_batch_count_denominator"]
+    pop_c = payload["population_c_row_count_denominator"]
+    time = payload["analyst_time"]
+    baselines = payload["baselines"]
+
+    expectations: list[tuple[str, str]] = [
+        ("ReconciliationCase", str(pop_a["case_count"])),
+        ("Case match rate", pop_a["case_match_rate_case_count"]),
+        ("Deterministic residual", str(pop_a["deterministic_residual_count"])),
+        ("Residual false-match rate", pop_a["residual_false_match_rate_case_count"]),
+        ("Gross-exposure match rate", pop_a["gross_exposure_match_rate_expected_gross"]),
+        ("Expected-net cash reconciled", pop_a["expected_net_cash_reconciled_expected_net"]),
+        ("Unresolved expected-net cash", pop_a["unresolved_expected_net_cash_expected_net"]),
+        ("Evidence coverage", pop_a["evidence_coverage_case_count"]),
+        ("batch↔bank links", str(pop_b["batch_count"])),
+        ("Batch link rate", pop_b["batch_link_rate_batch_count"]),
+        ("Batch link rate", f"{pop_b['linked_count']}/{pop_b['batch_count']}"),
+        ("Batch false-link rate", pop_b["batch_false_link_rate_batch_count"]),
+        (
+            "Injected noise recovered",
+            f"{pop_b['injected_noise_recovered_batch_count']}/{pop_b['injected_noise_batch_count']}",
+        ),
+        ("Injected noise recovered", pop_b["noise_recovery_rate_counting_defect"]),
+        ("Injected noise recovered", pop_b["noise_recovery_rate_excluding_defect"]),
+        ("Category precision on unresolved", pop_b["category_precision_on_unresolved_batch_count"]),
+        ("row-grain variances", str(pop_c["row_count"])),
+        ("| Recall", pop_c["row_variance_recall_row_count"]),
+        ("| Precision", pop_c["row_variance_precision_row_count"]),
+        ("| Value", pop_c["row_variance_value_row_value"]),
+        ("deterministic resolutions", str(time["deterministic_resolutions"])),
+        ("deterministic resolutions", str(time["minutes_saved_deterministic_derived_estimate"])),
+        ("| naive", str(baselines["naive"]["batches_linked"])),
+        ("| deterministic_only", str(baselines["deterministic_only"]["batches_linked"])),
+        ("| settlesense", str(baselines["settlesense"]["batches_linked"])),
+    ]
+    return expectations
+
+
+def _readme_disagreements(section: str, payload: dict[str, Any]) -> list[str]:
+    """Every disagreement, not the first.
+
+    Returns a list so one wrong digit does not mask five others - a fix-one-
+    rerun loop would let a stale README be corrected one number per commit
+    while still being wrong in between.
+    """
+    lines = [_flatten_readme_number(line) for line in section.splitlines()]
+    problems: list[str] = []
+    for label, expected in _readme_expectations(payload):
+        flat_label = _flatten_readme_number(label)
+        row = next((line for line in lines if flat_label.lower() in line.lower()), None)
+        if row is None:
+            problems.append(f"no README row mentions {label!r}")
+        elif expected not in row:
+            problems.append(f"{label!r} should quote {expected!r}, README says: {row.strip()}")
+    return problems
+
+
+@pytest.mark.hygiene
+def test_25_readme_numbers_match_the_committed_artifact() -> None:
+    """Every quoted figure in the README traces to reports/eval/results.json.
+
+    This is the test that makes the README a claim rather than an assertion.
+    """
+    assert COMMITTED_RESULTS.exists(), (
+        "reports/eval/results.json is not committed. The README quotes it, so "
+        "without the file the numbers are unfalsifiable."
+    )
+    payload = json.loads(COMMITTED_RESULTS.read_text(encoding="utf-8"))
+    section = _readme_dev_section((REPO / "README.md").read_text(encoding="utf-8"))
+    problems = _readme_disagreements(section, payload)
+    assert not problems, "README disagrees with the artifact:\n  " + "\n  ".join(problems)
+    checked = len(_readme_expectations(payload))
+    assert checked >= 20, f"only {checked} figures cross-checked - the table is barely covered"
+    print(f"\n  README figures cross-checked against results.json: {checked}, 0 disagreements")
+
+
+@pytest.mark.hygiene
+def test_25b_the_readme_cross_check_can_actually_fail() -> None:
+    """Fault injection for test 25. Three ways a README goes stale.
+
+    Without this, test 25 passing would be equally consistent with the checker
+    inspecting an empty expectation list.
+    """
+    payload = json.loads(COMMITTED_RESULTS.read_text(encoding="utf-8"))
+    section = _readme_dev_section((REPO / "README.md").read_text(encoding="utf-8"))
+    assert not _readme_disagreements(section, payload), "precondition: README is currently clean"
+
+    residual = str(payload["population_a_case_count_denominator"]["deterministic_residual_count"])
+    mutations = {
+        "a digit changed": section.replace(f"| **{residual}** |", "| **51** |"),
+        "a row deleted": "\n".join(
+            line for line in section.splitlines() if "Case match rate" not in line
+        ),
+        "money quietly rounded": section.replace("72,204,883.74", "72,204,884.00"),
+    }
+    for name, mutated in mutations.items():
+        assert mutated != section, f"mutation {name!r} changed nothing - it tested nothing"
+        problems = _readme_disagreements(mutated, payload)
+        assert problems, f"the checker did not notice: {name}"
+        print(f"\n  {name}: {problems[0][:90]}")
+
+
+@pytest.mark.hygiene
+def test_25c_the_holdout_has_no_numbers_in_the_readme_yet() -> None:
+    """The holdout is run ONCE. Until then the README must say so.
+
+    A holdout figure appearing before the single run is the exact failure the
+    discipline exists to prevent, and it is silent: a plausible number in a
+    table looks identical whether it was run once or thirty times. The holdout
+    is also the only one of the three sets with this rule - the dev set and
+    the AI evaluation set may both be re-run freely.
+    """
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    start = readme.index("### Held-out set")
+    section = readme[start : readme.index("---", start)]
+    assert "NOT YET RUN" in section, "the holdout section no longer declares itself unrun"
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "reports/eval-holdout"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert not tracked, f"held-out results are committed before the final run: {tracked}"
+    print("\n  holdout: declared NOT YET RUN, no committed artifact")
+
+
+@pytest.mark.hygiene
+def test_25d_the_three_sets_are_described_with_their_distinct_rules() -> None:
+    """Three sets, three rules. Collapsing them into two loses the distinction.
+
+    The AI evaluation set is NOT a holdout: its results may be inspected and
+    iterated against, and only its membership is frozen. A README that calls
+    both of them held-out would overclaim on one and misuse the other.
+    """
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    for seed_marker in ("42", "999", "1000", "1019"):
+        assert seed_marker in readme, f"seed {seed_marker} is not named in the README"
+    assert "not a second holdout" in readme.lower(), (
+        "the README does not distinguish the AI evaluation set from the holdout"
+    )
+    assert "Run ONCE" in readme, "the holdout's look-once rule is not stated"
+    print("\n  three sets named with distinct rules: dev(42) ai-eval(1000-1019) holdout(999)")
