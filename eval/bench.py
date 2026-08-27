@@ -43,9 +43,9 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from eval.run_eval import load_days
+from eval.run_eval import input_rows, load_days
 from settlesense.config import AppConfig, load_config
-from settlesense.core.telemetry import MachineSpec, StageTimer, StageTiming
+from settlesense.core.telemetry import MachineSpec, StageTimer, StageTiming, format_rate
 from settlesense.matching.engine import residual_cases, run_with_telemetry
 
 DEFAULT_SIZES: tuple[int, ...] = (500, 5000, 25000)
@@ -169,34 +169,11 @@ def generate(records: int, out_dir: Path) -> float:
     return collector[0].seconds
 
 
-def _input_rows(data_dir: Path) -> int:
-    """Total CSV data rows on disk, header excluded.
-
-    Counted from the FILES rather than from the parsed dataset, so a row the
-    ingest layer dropped still counts as work the pipeline was handed.
-
-    A MISSING directory and an EMPTY one are different, and this refused to
-    tell them apart in its first version: `Path.glob` on a directory that does
-    not exist yields nothing rather than raising, so both returned 0 and the
-    scaling table would have shown a clean `0 input rows` for a dataset that
-    was never generated. Header-only files still return 0 - that is legitimate
-    data, and day 1 genuinely has no bank credits because settlement is T+N.
-    """
-    if not data_dir.is_dir():
-        raise SystemExit(
-            f"{data_dir} does not exist. A benchmark over a dataset that was never "
-            "generated would report zero rows, which is indistinguishable from a "
-            "dataset that is legitimately empty."
-        )
-    paths = sorted(data_dir.glob("day*_*.csv"))
-    if not paths:
-        raise SystemExit(f"{data_dir} exists but holds no day*_*.csv files")
-    total = 0
-    for path in paths:
-        with path.open(encoding="utf-8") as handle:
-            lines = sum(1 for _ in handle)
-        total += max(lines - 1, 0)
-    return total
+# `_input_rows` MOVED to eval/run_eval.py. The evaluation runner needs the same
+# ingest denominator, bench.py already imports from run_eval, and two copies of
+# "what counts as a row" is exactly the kind of pair that drifts apart silently.
+# Re-exported under the old private name so nothing that imports it here breaks.
+_input_rows = input_rows
 
 
 def _median_stages(runs: Sequence[tuple[StageTiming, ...]]) -> tuple[StageTiming, ...]:
@@ -289,8 +266,10 @@ def run_size(records: int, config: AppConfig, as_of: date, repetitions: int) -> 
         return measure(records, out, config, as_of, elapsed, repetitions)
 
 
-def _fmt_rate(rate: float | None) -> str:
-    return "—" if rate is None else f"{rate:,.0f}"
+# `_fmt_rate` MOVED to settlesense/core/telemetry.py, beside the
+# `records_per_second` property whose None it renders. It existed here and in
+# run_eval.py as two identical private copies.
+_fmt_rate = format_rate
 
 
 def _fmt_seconds(seconds: float) -> str:

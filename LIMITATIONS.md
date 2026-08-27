@@ -36,19 +36,44 @@ obvious rule, and PDD 6.2 anticipates exactly this migration. Building it now
 would be tuning against the holdout. It belongs in a version whose evaluation
 uses a seed nobody has looked at.
 
-## No throughput figure exists for the held-out set, and none can be taken now
+## The held-out set has no throughput figure. The harness that failed to take one has been fixed
 
-`eval/run_eval.py` collects no telemetry — it emits accuracy only. So the
-holdout run recorded Populations A, B and C and **no records/second**. Every
-throughput number in this project comes from `make bench` on seed 42 and from
-synthetic scaling to 100,000 records.
+`eval/run_eval.py` collected no telemetry — it emitted accuracy only. The M5a
+`StageTimer` existed, was tested, and was used by `make bench`, and **nobody had
+connected it to the evaluation runner.** Nothing failed: the runner emitted
+accuracy, the tests checked accuracy, and a missing measurement is invisible to
+a suite that never asks for it. So seed 999 recorded Populations A, B and C and
+**no records/second**.
 
-This was noticed when a report of the holdout was asked for and throughput was
-in the list. The fix is one line — hand `run_eval` the M5a `StageTimer`. It is
-not being made, because taking a throughput reading now means running seed 999 a
-second time, and the run is spent. Throughput is a property of the machine and
-the record count rather than of the noise mix, so the dev figures are the better
-estimate anyway; what is missing is the confirmation, not the number.
+It surfaced only when a report of the holdout run was asked for and throughput
+was on the list. By then the set was spent.
+
+**The runner is now wired** — `make eval` writes `reports/eval/throughput.md`
+alongside the results, and `tests/test_timing.py` 16–22 hold it there. Timings
+go to a **separate file**, never into `results.json`, for the reason SDD 8.1
+keeps telemetry out of `ReconciliationResult`: that artifact is compared byte
+for byte against a committed golden and a duration differs on every run. Test 18
+asserts the payload is identical with instrumentation on and off; test 17
+booby-traps `perf_counter` so "the uninstrumented path reads no clock" is proven
+by the run succeeding rather than inferred from a small number.
+
+**Seed 999 still has no throughput figure and will not get one.** Producing it
+means a second run. Test 22 asserts `reports/eval-holdout/throughput.md` does
+not exist, so the row cannot be quietly filled in later — the only way that file
+could appear is the run that must not happen.
+
+Two things the wiring exposed immediately, which is the argument for having
+done it:
+
+- **The first headline was wrong by 36%.** Dividing cases by *every* stage
+  included `metrics` and `baselines` — the code that scores the run against
+  truth — and reported 8,732 cases/s where the pipeline had done 13,621. That
+  bills the engine for the cost of measuring it. Both figures are printed now,
+  each labelled with what it contains.
+- **`run_baselines` runs the deterministic engine a second time**, rather than
+  reusing what `evaluate` already computed. Left in place — a baseline is
+  supposed to be an independent re-run — but it was invisible until something
+  timed it.
 
 Recorded rather than quietly omitted, because a reader comparing the dev and
 holdout tables will notice one row present in one and absent in the other.

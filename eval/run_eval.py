@@ -35,11 +35,48 @@ from eval.metrics import (
     residual_set_sentence,
 )
 from settlesense.config import AppConfig, load_config
+from settlesense.core.telemetry import MachineSpec, StageTimer, StageTiming, format_rate
 from settlesense.ingest import DayDataset, load_dataset
 from settlesense.matching.engine import build_cases, merge_days
 
 BASELINES = ("naive", "det", "llm", "settlesense")
 DEFAULT_AS_OF = date(2026, 11, 30)
+
+
+def input_rows(data_dir: Path) -> int:
+    """Data rows across every day*_*.csv, counted from the FILES.
+
+    Counted from the files rather than from the parsed dataset, so a row the
+    ingest layer dropped still counts as work the pipeline was handed.
+
+    A MISSING directory and an EMPTY one are different, and this refused to
+    tell them apart in its first version: `Path.glob` on a directory that does
+    not exist yields nothing rather than raising, so both returned 0 and a
+    scaling table would have shown a clean `0 input rows` for a dataset that
+    was never generated. Header-only files still return 0 - that is legitimate
+    data, and day 1 genuinely has no bank credits because settlement is T+N.
+
+    LIVES HERE, NOT IN bench.py, WHERE IT WAS WRITTEN. Both the benchmark and
+    the evaluation runner need an ingest denominator, and bench.py already
+    imports from this module - so moving it up the existing dependency edge
+    leaves one definition instead of two that could disagree about what a row
+    is. `eval.bench._input_rows` still resolves, for the tests that name it.
+    """
+    if not data_dir.is_dir():
+        raise SystemExit(
+            f"{data_dir} does not exist. Counting rows in a dataset that was never "
+            "generated would report zero, which is indistinguishable from a "
+            "dataset that is legitimately empty."
+        )
+    paths = sorted(data_dir.glob("day*_*.csv"))
+    if not paths:
+        raise SystemExit(f"{data_dir} exists but holds no day*_*.csv files")
+    total = 0
+    for path in paths:
+        with path.open(encoding="utf-8") as handle:
+            lines = sum(1 for _ in handle)
+        total += max(lines - 1, 0)
+    return total
 
 
 def load_days(data_dir: Path, config: AppConfig) -> DayDataset:
@@ -62,15 +99,28 @@ def evaluate(
     truth: TruthView,
     as_of: date,
     minutes_per_review: int,
+    timings: list[StageTiming] | None = None,
 ) -> dict[str, Any]:
-    """Run the deterministic system and compute all three populations."""
-    result = run_deterministic_only(dataset, config, as_of)
-    cases_by_id = {fact.case.case_id: fact.case for fact in build_cases(dataset, config)}
+    """Run the deterministic system and compute all three populations.
 
-    pop_a = population_a(result, cases_by_id, truth)
-    pop_b = population_b(result, truth)
-    pop_c = population_c(result, truth)
-    minutes = analyst_minutes_saved(result, minutes_per_review, ai_confirmed_residuals=0)
+    `timings` is a COLLECTOR, not a return value, and defaults to None - which
+    reads no clock at all. Nothing timed here reaches `payload`: durations vary
+    between runs and results.json is compared byte for byte against a committed
+    golden, so a seconds field in there would fail the comparison every time it
+    was right. Same separation as SDD 8.1, applied to the artifact instead of
+    the object.
+    """
+    with StageTimer(timings, "engine (P1-P9)", dataset.row_count()) as timer:
+        result = run_deterministic_only(dataset, config, as_of)
+        timer.records_out = len(result.cases)
+
+    with StageTimer(timings, "metrics (populations A/B/C)", len(result.cases)) as timer:
+        cases_by_id = {fact.case.case_id: fact.case for fact in build_cases(dataset, config)}
+        pop_a = population_a(result, cases_by_id, truth)
+        pop_b = population_b(result, truth)
+        pop_c = population_c(result, truth)
+        minutes = analyst_minutes_saved(result, minutes_per_review, ai_confirmed_residuals=0)
+        timer.records_out = pop_a.case_count
 
     payload: dict[str, Any] = {
         "seed": truth.seed,
@@ -97,7 +147,12 @@ def evaluate(
 
 
 def run_baselines(
-    dataset: DayDataset, config: AppConfig, truth: TruthView, as_of: date, selected: Sequence[str]
+    dataset: DayDataset,
+    config: AppConfig,
+    truth: TruthView,
+    as_of: date,
+    selected: Sequence[str],
+    timings: list[StageTiming] | None = None,
 ) -> dict[str, Any]:
     """Each baseline's headline figures. NO RANKING IS ASSERTED.
 
@@ -106,6 +161,13 @@ def run_baselines(
     reports link count and false-link count side by side so volume and
     precision are visible as two different numbers.
     """
+    with StageTimer(timings, "baselines", dataset.row_count()):
+        return _run_baselines(dataset, config, truth, as_of, selected)
+
+
+def _run_baselines(
+    dataset: DayDataset, config: AppConfig, truth: TruthView, as_of: date, selected: Sequence[str]
+) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if "naive" in selected:
         links = run_naive(dataset, config, as_of)
@@ -259,6 +321,86 @@ def to_markdown(payload: dict[str, Any], baselines: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def throughput_markdown(
+    payload: dict[str, Any], timings: Sequence[StageTiming], machine: MachineSpec
+) -> str:
+    """`throughput.md` - a SEPARATE artifact, never folded into results.json.
+
+    Kept apart for the reason SDD 8.1 keeps telemetry out of
+    ReconciliationResult: results.json is compared byte for byte against a
+    committed golden, and a duration is different on every run. Two files means
+    the accuracy artifact stays comparable and the timing artifact stays honest,
+    with no strip step between them.
+
+    This is ONE run, not a median. reports/bench.md takes the median of three
+    repetitions across five dataset sizes and is the figure to quote; this one
+    says what this particular evaluation cost. Stated up front because the two
+    tables look alike and a reader would otherwise compare them directly.
+
+    THE HEADLINE IS THE PIPELINE, NOT THE TOTAL. `metrics` and `baselines`
+    score the run against truth - they are the measuring instrument, and a
+    production deployment has neither. Dividing cases by the total put the
+    harness's own cost into a number labelled throughput and reported 8,732
+    where the pipeline had done 13,621; the first version of this file did
+    exactly that. Both are printed now, each labelled with what it includes.
+    """
+    total = sum(timing.seconds for timing in timings)
+    pipeline_stages = {"ingest+normalize", "engine (P1-P9)"}
+    pipeline = sum(timing.seconds for timing in timings if timing.stage in pipeline_stages)
+    cases = payload["population_a_case_count_denominator"]["case_count"]
+    lines = [
+        f"# Evaluation throughput — seed {payload['seed']}",
+        "",
+        f"`{machine.describe()}`",
+        "",
+        f"**Pipeline: {cases:,} cases in {pipeline:.3f}s — {cases / pipeline:,.0f} cases/second.** "
+        f"Ingest plus engine, which is what `bench.md` measures and what a "
+        f"deployment would run."
+        if pipeline > 0
+        else "",
+        "",
+        f"Whole harness including scoring: {total:.3f}s, {cases / total:,.0f} cases/second. "
+        f"Lower, and correctly so - `metrics` and `baselines` exist to grade the "
+        f"run against truth and have no counterpart in production. Quoting this "
+        f"number as throughput would bill the engine for the measurement."
+        if total > 0
+        else "",
+        "",
+        "A SINGLE run, not a median. [`bench.md`](../bench.md) is the headline "
+        "throughput claim: median of 3 repetitions across 5 dataset sizes. This "
+        "file says what one `make eval` cost on this machine.",
+        "",
+        "| Stage | Seconds | Records in | Records out | Records/s |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for timing in timings:
+        lines.append(
+            f"| {timing.stage} | {timing.seconds:.3f} | {timing.records_in:,} "
+            f"| {timing.records_out:,} | {format_rate(timing.records_per_second)} |"
+        )
+    lines += [
+        f"| **total** | **{total:.3f}** | | | |",
+        "",
+        "`baselines` re-runs the deterministic engine a second time — "
+        "`run_baselines` calls `run_deterministic_only` again rather than "
+        "reusing what `evaluate` already computed. That duplication was "
+        "invisible until this file existed, which is a fair argument for the "
+        "instrumentation. It is left in place: the baseline table is supposed "
+        "to be an independent re-run, and the cost is paid by the harness "
+        "rather than by anything a user waits for.",
+        "",
+        "## Why the held-out set has no such file",
+        "",
+        "Seed 999 was run once, before this wiring existed, and it emitted "
+        "accuracy only. Producing a throughput figure for it now would mean "
+        "running it a second time. The harness is fixed for every future "
+        "evaluation; the holdout keeps its gap, recorded in LIMITATIONS.md "
+        "rather than quietly filled in.",
+        "",
+    ]
+    return "\n".join(line for line in lines if line is not None) + "\n"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the SettleSense evaluation.")
     parser.add_argument("--data", type=Path, required=True, help="directory of day*_*.csv")
@@ -276,15 +418,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
-    dataset = load_days(args.data, config)
+
+    # M5a StageTimer, wired here rather than left as a gap. It collects into a
+    # local list that only throughput.md ever reads.
+    timings: list[StageTiming] = []
+    with StageTimer(timings, "ingest+normalize", input_rows(args.data)) as timer:
+        dataset = load_days(args.data, config)
+        timer.records_out = dataset.row_count()
+
     truth = TruthView.from_payload(json.loads(args.truth.read_text(encoding="utf-8")))
     selected = BASELINES if args.baselines == "all" else tuple(args.baselines.split(","))
     minutes = (
         args.minutes_per_review or config.thresholds.reporting.assumed_review_minutes_per_exception
     )
 
-    payload = evaluate(dataset, config, truth, args.as_of, minutes)
-    payload["baselines"] = run_baselines(dataset, config, truth, args.as_of, selected)
+    payload = evaluate(dataset, config, truth, args.as_of, minutes, timings)
+    payload["baselines"] = run_baselines(dataset, config, truth, args.as_of, selected, timings)
     assert_no_ambiguous_money_keys(payload)
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -294,8 +443,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     (args.out / "results.md").write_text(
         to_markdown(payload, payload["baselines"]), encoding="utf-8"
     )
+    (args.out / "throughput.md").write_text(
+        throughput_markdown(payload, timings, MachineSpec.current()), encoding="utf-8"
+    )
     print(payload["residual_set_sentence"])
-    print(f"\nwrote {args.out / 'results.json'} and {args.out / 'results.md'}")
+
+    pipeline = sum(
+        timing.seconds
+        for timing in timings
+        if timing.stage in {"ingest+normalize", "engine (P1-P9)"}
+    )
+    cases = payload["population_a_case_count_denominator"]["case_count"]
+    if pipeline > 0:
+        print(f"\n{cases:,} cases in {pipeline:.3f}s — {cases / pipeline:,.0f} cases/second")
+        print("(ingest + engine; scoring excluded, see throughput.md)")
+    print(f"wrote results.json, results.md and throughput.md to {args.out}")
     return 0
 
 

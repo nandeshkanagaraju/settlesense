@@ -34,11 +34,11 @@
     "tests/test_split_pricing.py": 9,
     "tests/test_store.py": 38,
     "tests/test_suite_budget.py": 8,
-    "tests/test_timing.py": 20,
+    "tests/test_timing.py": 27,
     "tests/test_truth_independence.py": 11,
     "tests/test_types_money.py": 33,
     "tests/test_verbosity_honoured.py": 8,
     "tests/test_view_parity.py": 9
   },
-  "total": 1022
+  "total": 1029
 }

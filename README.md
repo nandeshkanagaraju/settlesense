@@ -275,6 +275,14 @@ threshold, not a tolerance, not a weight. Full artifact:
 | Expected-net cash reconciled | ₹71,043,122.01 | ₹72,204,883.74 |
 | Unresolved expected-net cash | ₹807,270.62 | ₹800,722.94 |
 | Evidence coverage | 1.000000 | 1.000000 |
+| Throughput (cases/s) | **not collected** [^tp] | see [throughput](#throughput--dev-seed-make-bench) |
+
+[^tp]: `eval/run_eval.py` emitted accuracy only; the M5a `StageTimer` was not
+wired into it, and wiring it now would require a second holdout run. All
+throughput figures in this README are seed 42. The harness has since been fixed
+— `reports/eval/throughput.md` is written on every `make eval` — but the fix
+landed after the holdout was spent, so seed 999 has no throughput figure and
+cannot be given one. See [LIMITATIONS](LIMITATIONS.md).
 
 | Population B — batch↔bank links (n=39 batches) | Holdout 999 | Dev 42 |
 |---|---|---|

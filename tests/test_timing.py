@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import json
 import socket
 import subprocess
 import sys
@@ -661,3 +662,250 @@ def test_15_the_network_guard_in_this_module_can_fire() -> None:
     with pytest.raises(AssertionError, match="network connection"):
         socket.create_connection(("example.invalid", 80))
     print("\n  socket() and create_connection() both refused")
+
+
+# ===========================================================================
+# 16-22. The EVALUATION RUNNER is wired to the timer
+#
+# WHY THIS SECTION EXISTS. The M5a timer was built, tested and used by the
+# benchmark, and never connected to `eval/run_eval.py`. Nothing failed: the
+# runner emitted accuracy, the tests checked accuracy, and the gap was only
+# noticed when a report of the held-out run was asked for and throughput was on
+# the list - by which point seed 999 was spent and could not be re-measured.
+#
+# So these tests are less about the timer, which was already covered, than
+# about the CONNECTION - and specifically about the two ways connecting it
+# could go wrong: contaminating results.json with a duration, or reading a
+# clock on the path that asked not to be timed.
+# ===========================================================================
+
+EXPECTED_EVAL_STAGES = (
+    "ingest+normalize",
+    "engine (P1-P9)",
+    "metrics (populations A/B/C)",
+    "baselines",
+)
+"""In PASS ORDER, and exact. Order matters here in a way it does not for a set
+membership check: throughput.md reads top to bottom as the shape of a run."""
+
+PIPELINE_STAGES = frozenset({"ingest+normalize", "engine (P1-P9)"})
+"""What a DEPLOYMENT would run. `metrics` and `baselines` grade the run against
+truth and have no production counterpart, so the headline divides by these two
+alone - see test 19 for what including them did to the number."""
+
+
+@pytest.fixture(scope="module")
+def truth() -> Any:
+    from eval.metrics import TruthView
+
+    return TruthView.from_payload(json.loads((DATA / "truth_42.json").read_text(encoding="utf-8")))
+
+
+def test_16_evaluate_collects_every_stage_in_pass_order(
+    dataset: Any, config: AppConfig, truth: Any
+) -> None:
+    """16. The runner's own stages, realised and printed - never a literal list
+    copied from a brief. A stage added later and left untimed fails here."""
+    from eval.run_eval import evaluate, run_baselines
+
+    timings: list[StageTiming] = []
+    evaluate(dataset, config, truth, AS_OF, 4, timings)
+    run_baselines(dataset, config, truth, AS_OF, ("naive", "det"), timings)
+
+    realised = tuple(timing.stage for timing in timings)
+    assert realised == EXPECTED_EVAL_STAGES[1:], realised
+    assert all(timing.seconds > 0 for timing in timings), realised
+    print(f"\n  {len(realised)} runner stages timed, in order: {' -> '.join(realised)}")
+
+
+def test_17_a_none_collector_reads_no_clock_at_all(
+    dataset: Any, config: AppConfig, truth: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """17. FAULT INJECTION, the strong form. `perf_counter` is replaced with a
+    function that RAISES, so "no clock was read" is proven by the run
+    succeeding rather than inferred from a timing that looks small.
+
+    Then the same call with a real collector must raise, which is what makes
+    the first half mean something: a monkeypatch that silently failed to apply
+    would let both halves pass.
+    """
+    from eval.run_eval import evaluate
+
+    def refuse() -> float:
+        raise AssertionError("a clock was read on the uninstrumented path")
+
+    monkeypatch.setattr(time, "perf_counter", refuse)
+
+    payload = evaluate(dataset, config, truth, AS_OF, 4, None)
+    assert payload["population_a_case_count_denominator"]["case_count"] > 0
+
+    with pytest.raises(AssertionError, match="a clock was read"):
+        evaluate(dataset, config, truth, AS_OF, 4, [])
+    print("\n  timings=None ran with perf_counter booby-trapped; timings=[] tripped it")
+
+
+def test_18_instrumentation_does_not_change_results_json(
+    dataset: Any, config: AppConfig, truth: Any
+) -> None:
+    """18. THE SEPARATION PROPERTY, at the artifact layer.
+
+    results.json is compared byte for byte against a committed golden, so a
+    duration reaching it would fail that comparison on every run - including
+    the runs where nothing was wrong. Asserted on the serialized bytes, not on
+    the dict, because that is what gets written.
+    """
+    from eval.run_eval import evaluate
+
+    without = evaluate(dataset, config, truth, AS_OF, 4, None)
+    with_timings = evaluate(dataset, config, truth, AS_OF, 4, [])
+    assert json.dumps(without, indent=2, sort_keys=True) == json.dumps(
+        with_timings, indent=2, sort_keys=True
+    )
+
+    # And no float anywhere in it: a duration would arrive as one.
+    def floats(node: Any, path: str = "") -> list[str]:
+        if isinstance(node, float):
+            return [path]
+        if isinstance(node, dict):
+            return [p for k, v in node.items() for p in floats(v, f"{path}.{k}")]
+        if isinstance(node, list):
+            return [p for i, v in enumerate(node) for p in floats(v, f"{path}[{i}]")]
+        return []
+
+    assert not floats(with_timings), floats(with_timings)
+    print(f"\n  payload identical with and without timings; 0 floats in {len(with_timings)} keys")
+
+
+def test_19_the_headline_excludes_the_measuring_instrument(
+    dataset: Any, config: AppConfig, truth: Any
+) -> None:
+    """19. The headline divides by the PIPELINE, not by the total.
+
+    The first version of throughput.md divided cases by every stage including
+    `metrics` and `baselines` - the code that scores the run against truth -
+    and reported 8,732 cases/s where the pipeline had done 13,621. That is not
+    a rounding difference, it is a different claim: it bills the engine for the
+    cost of measuring it. Both figures are printed now; this asserts they are
+    printed as two numbers and that the headline is the larger, correct one.
+    """
+    from eval.run_eval import evaluate, input_rows, run_baselines, throughput_markdown
+
+    timings: list[StageTiming] = []
+    with StageTimer(timings, "ingest+normalize", input_rows(DATA)) as timer:
+        timer.records_out = load_days(DATA, config).row_count()
+    payload = evaluate(dataset, config, truth, AS_OF, 4, timings)
+    payload["baselines"] = run_baselines(dataset, config, truth, AS_OF, ("naive", "det"), timings)
+    rendered = throughput_markdown(payload, timings, MachineSpec.current())
+
+    total = sum(timing.seconds for timing in timings)
+    pipeline = sum(t.seconds for t in timings if t.stage in PIPELINE_STAGES)
+    assert 0 < pipeline < total, (pipeline, total)
+    assert "Pipeline:" in rendered and "Whole harness" in rendered, rendered[:400]
+
+    cases = payload["population_a_case_count_denominator"]["case_count"]
+    assert f"{cases / pipeline:,.0f} cases/second" in rendered
+    assert f"{cases / total:,.0f} cases/second" in rendered
+    print(
+        f"\n  pipeline {cases / pipeline:,.0f} cases/s vs whole harness "
+        f"{cases / total:,.0f} cases/s - both rendered, headline is the pipeline"
+    )
+
+
+def test_20_the_runner_and_the_benchmark_count_the_same_dataset_identically(
+    dataset: Any, config: AppConfig, truth: Any
+) -> None:
+    """20. CROSS-CHECK AGAINST bench.md, on the DENOMINATORS rather than the rates.
+
+    Both instruments measure the same 5,000-record dev dataset. Their rates
+    must not be compared - one is a median of three repetitions, the other a
+    single run - but their RECORD COUNTS are deterministic and must agree
+    exactly. This is the check that would have caught the M5a defect where a
+    stage was billed a denominator belonging to a different population and
+    reported 248 records/s.
+    """
+    from eval.run_eval import evaluate, input_rows
+
+    bench = (REPO / "reports" / "bench.md").read_text(encoding="utf-8")
+    row = next(line for line in bench.splitlines() if line.startswith("| 5,000 |"))
+    _, records, bench_cases, bench_rows, *_ = (cell.strip() for cell in row.split("|"))
+    del records
+
+    # Ingest is timed in `main`, not in `evaluate` - it happens before there is
+    # anything to evaluate - so it is timed here the same way `main` does it.
+    # The first version of this test read the fixture's already-loaded dataset
+    # and then looked for an ingest stage that nothing had produced.
+    timings: list[StageTiming] = []
+    with StageTimer(timings, "ingest+normalize", input_rows(DATA)) as timer:
+        loaded = load_days(DATA, config)
+        timer.records_out = loaded.row_count()
+    payload = evaluate(dataset, config, truth, AS_OF, 4, timings)
+    ingest = next(timing for timing in timings if timing.stage == "ingest+normalize")
+    engine = next(timing for timing in timings if timing.stage == "engine (P1-P9)")
+
+    assert input_rows(DATA) == int(bench_rows.replace(",", "")), (input_rows(DATA), bench_rows)
+    assert engine.records_out == int(bench_cases.replace(",", "")), engine.records_out
+    assert engine.records_out == payload["population_a_case_count_denominator"]["case_count"]
+    assert ingest.records_in == input_rows(DATA), (ingest.records_in, input_rows(DATA))
+    print(
+        f"\n  bench.md and run_eval agree: {bench_rows} input rows -> {bench_cases} cases, "
+        "on both instruments"
+    )
+
+
+def test_21_make_eval_writes_throughput_md_and_the_readme_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """21. END TO END. The README footnote promises this file on every run."""
+    from eval.run_eval import main
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    code = main(
+        [
+            "--data",
+            str(DATA),
+            "--truth",
+            str(DATA / "truth_42.json"),
+            "--baselines",
+            "naive,det",
+            "--out",
+            str(tmp_path),
+            "--config",
+            str(REPO / "config"),
+        ]
+    )
+    assert code == 0
+    written = sorted(path.name for path in tmp_path.iterdir())
+    assert written == ["results.json", "results.md", "throughput.md"], written
+
+    rendered = (tmp_path / "throughput.md").read_text(encoding="utf-8")
+    for stage in EXPECTED_EVAL_STAGES[:3]:
+        assert f"| {stage} |" in rendered, stage
+    assert "seed 42" in rendered
+
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    assert "reports/eval/throughput.md" in readme, (
+        "the README footnote no longer names the file this test just produced"
+    )
+    print(f"\n  make eval wrote {written}; README names throughput.md")
+
+
+@pytest.mark.charter_guard
+def test_22_the_holdout_has_no_throughput_file_and_that_is_deliberate() -> None:
+    """22. THE GAP IS ASSERTED, not merely described in prose.
+
+    Seed 999 was run once, before this wiring existed. Filling its throughput
+    row in later means running it a second time, so the row stays empty and
+    this test fails the moment somebody generates the file - which is the only
+    way that file could come to exist.
+    """
+    holdout = REPO / "reports" / "eval-holdout"
+    present = sorted(path.name for path in holdout.iterdir())
+    assert "throughput.md" not in present, (
+        "reports/eval-holdout/throughput.md exists. The only way to produce it is "
+        "a second run of seed 999, which spends a set that was spent once already."
+    )
+    assert present == ["results.json", "results.md"], present
+
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    assert "**not collected**" in readme, "the README no longer records the gap"
+    print(f"\n  reports/eval-holdout/ holds {present}; no throughput file, by design")

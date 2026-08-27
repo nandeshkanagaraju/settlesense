@@ -37,7 +37,23 @@ import time
 from dataclasses import dataclass, field
 from types import TracebackType
 
-__all__ = ["MachineSpec", "RunTelemetry", "StageTimer", "StageTiming"]
+__all__ = ["MachineSpec", "RunTelemetry", "StageTimer", "StageTiming", "format_rate"]
+
+
+def format_rate(rate: float | None) -> str:
+    """A dash, never a number, when the stage was too fast to time.
+
+    LIVES HERE because it is the other half of `records_per_second` returning
+    None: that decision is only worth anything if every renderer honours it,
+    and it was honoured by two identical private copies - one in eval/bench.py,
+    one in eval/run_eval.py - which is how a pair drifts. One definition, beside
+    the property whose contract it implements.
+
+    It also keeps `float` out of eval/run_eval.py's annotations. D6's exemption
+    covers telemetry and the benchmark; a third module joining that list should
+    be a decision someone makes, not a side effect of needing to print a rate.
+    """
+    return "—" if rate is None else f"{rate:,.0f}"
 
 
 @dataclass(frozen=True)

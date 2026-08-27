@@ -46,7 +46,6 @@ REGISTERED_READERS = frozenset(
         "settlesense/config.py",
         "eval/run_eval.py",
         "eval/run_eval_ai.py",
-        "eval/bench.py",
         "eval/run_ai.py",
         "eval/record_fixtures.py",
         "settlesense/exceptions/store.py",
@@ -222,30 +221,53 @@ def _replay_empty(tmp: Path) -> str:
     return f"corrupt fixture: {caught.value}"
 
 
-def _bench_missing(tmp: Path) -> str:
+def _input_rows_missing(tmp: Path) -> str:
     """A data directory that was never generated.
 
-    This is the case bench.py originally got WRONG: `Path.glob` on a missing
-    directory yields nothing instead of raising, so the row counter returned 0
-    and the scaling table would have printed a clean `0 input rows` for a
-    dataset that does not exist.
+    This is the case the row counter originally got WRONG: `Path.glob` on a
+    missing directory yields nothing instead of raising, so it returned 0 and
+    the scaling table would have printed a clean `0 input rows` for a dataset
+    that does not exist.
+
+    IT USED TO LIVE IN eval/bench.py and now lives in eval/run_eval.py, because
+    the evaluation runner needs the same ingest denominator and two copies of
+    "what counts as a row" is a pair that drifts. The behaviour is unchanged and
+    is still exercised in both directions - see the test below, which is why
+    this pair is no longer wired into CONTRACTS: bench.py stopped reading files
+    altogether, and `test_the_registry_lists_nothing_that_stopped_reading_files`
+    caught the stale registry entry the moment the function moved.
     """
-    from eval.bench import _input_rows
+    from eval.run_eval import input_rows
 
     with pytest.raises(SystemExit) as caught:
-        _input_rows(tmp / "absent")
+        input_rows(tmp / "absent")
     return str(caught.value)
 
 
-def _bench_empty(tmp: Path) -> str:
+def _input_rows_empty(tmp: Path) -> str:
     """Day files that EXIST and carry only a header. Legitimate data."""
-    from eval.bench import _input_rows
+    from eval.run_eval import input_rows
 
     (tmp / "day1_bank.csv").write_text(
         "bank_txn_id,value_date,amount,narration,direction\n", encoding="utf-8"
     )
-    assert _input_rows(tmp) == 0
+    assert input_rows(tmp) == 0
     return "counted, zero rows"
+
+
+def test_input_rows_tells_a_missing_dataset_from_an_empty_one(tmp_path: Path) -> None:
+    """The row counter's own missing-vs-empty contract, kept after the move.
+
+    `input_rows` is not in CONTRACTS because run_eval.py's entry there covers
+    `load_days`, and the registry maps one pair per module. Losing this pair
+    when the function moved would have been a silent reduction in coverage, so
+    it is asserted here directly.
+    """
+    missing = _input_rows_missing(tmp_path)
+    empty = _input_rows_empty(tmp_path)
+    assert "does not exist" in missing, missing
+    assert missing != empty
+    print(f"\n  missing -> SystemExit({missing[:40]}...); empty -> {empty}")
 
 
 def _store_missing(tmp: Path) -> str:
@@ -325,7 +347,6 @@ CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "settlesense/config.py": (_config_missing, _config_empty),
     "eval/run_eval.py": (_run_eval_missing, _run_eval_empty),
     "eval/run_eval_ai.py": (_run_eval_ai_missing, _run_eval_ai_empty),
-    "eval/bench.py": (_bench_missing, _bench_empty),
     "eval/run_ai.py": (_run_ai_missing, _run_ai_empty),
     "eval/record_fixtures.py": (_record_missing, _record_empty),
     "settlesense/exceptions/store.py": (_store_missing, _store_empty),

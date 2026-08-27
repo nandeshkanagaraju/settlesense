@@ -20,6 +20,14 @@
 eval/*
 !eval/results.json
 !eval/results.md
+# throughput.md is committed on the bench.md principle, not the results.json
+# one: durations differ run to run, so this is evidence of a real run on a
+# stated machine rather than a byte-stable artifact. It exists because the
+# holdout was run BEFORE the runner was instrumented and so has no throughput
+# figure at all - committing the dev one is what makes that absence checkable
+# instead of a claim. tests/test_timing.py 22 asserts the holdout still has no
+# counterpart to this file.
+!eval/throughput.md
 !eval-holdout/
 eval-holdout/*
 !eval-holdout/results.json
