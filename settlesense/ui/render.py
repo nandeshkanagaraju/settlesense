@@ -17,31 +17,28 @@ import html
 from collections.abc import Sequence
 from datetime import date
 from itertools import pairwise
-from typing import Any
 
-from settlesense.ai.client import FixtureMissError, ReplayLLMClient
-from settlesense.ai.hypothesis import generate
-from settlesense.ai.verifier import verify
+from settlesense.ai.client import ReplayLLMClient
 from settlesense.config import AppConfig
 from settlesense.exceptions.store import (
-    RESIDUAL_STATES,
     ExceptionStore,
     Population,
 )
 from settlesense.ingest import DayDataset
 from settlesense.ui.queue import (
     SEQUENCE_CAPTION,
+    EvidencePanel,
     PopulationSummary,
     QueueRow,
-    abstention_reason,
     arrival_days,
     as_display_dict,
     build_rows,
     current_categories,
     evidence_index,
-    money_trail,
+    evidence_panel,
     population_summaries,
     residual_sequence,
+    scope_notice,
 )
 
 __all__ = ["render_page"]
@@ -150,206 +147,130 @@ def _population_block(summaries: Sequence[PopulationSummary]) -> str:
     )
 
 
-def _money_trail_html(row: QueueRow, dataset: DayDataset, evidence: tuple[str, ...]) -> str:
-    trail = money_trail(evidence, dataset)
-    if not trail.steps:
+def _trail_html(panel: EvidencePanel) -> str:
+    if not panel.steps:
         return '<p class="note">No source rows resolve for this exception.</p>'
     lines = "\n".join(
-        f"{stage:>11} │ {_esc(row_id):<22} {_esc(fields)}" for stage, row_id, fields in trail.steps
+        f"{stage:>11} │ {_esc(row_id):<22} {_esc(fields)}" for stage, row_id, fields in panel.steps
     )
     tail = (
         ""
-        if trail.is_complete
+        if panel.trail_complete
         else '<p class="note">The chain stops before a bank credit — which is the finding, '
         "not a rendering gap.</p>"
     )
     return f'<div class="chain">{lines}</div>{tail}'
 
 
-def _ai_html(
-    row: QueueRow,
-    dataset: DayDataset,
-    config: AppConfig,
-    evidence: tuple[str, ...],
-    client: ReplayLLMClient,
-    pair_exceptions: dict[tuple[str, ...], Any] | None = None,
-) -> str:
-    """The hypothesis, its RANK, and the ranks tried before it.
+def _hypotheses_html(panel: EvidencePanel) -> str:
+    """Ranked hypotheses with the check that rejected each. FROM THE PANEL.
 
-    Where a lower-ranked hypothesis won, the rejected higher ones are shown
-    WITH their reasons. That is the 24/40 -> 33/40 property - verification
-    steering rather than only braking - and a claim nobody can see is a claim
-    nobody should believe.
+    This function used to call `generate` and `verify` itself, which made the
+    claim "both views read one EvidencePanel" false for the static page - it
+    was true of the app and of nothing else. `tests/test_view_parity.py` now
+    fails if either renderer computes a verdict.
     """
-    from settlesense.ai.hypothesis import AI_ELIGIBLE_CATEGORIES
-    from settlesense.types import Exception_
-
-    # THE FIXTURE IS KEYED BY PROMPT HASH, and a prompt embeds the exception's
-    # id, amount and reason. So the lookup has to rebuild the EXACT exception
-    # the recorder used - not an equivalent one describing the same pair. A
-    # probe assembled from the store row differs in all three fields and misses
-    # a recording that exists, which reads on the page as "the model was never
-    # asked" about a decision it answered.
-    canonical = (pair_exceptions or {}).get(evidence)
-
-    # THE ELIGIBILITY GATE APPLIES HERE TOO. A rules-decided category is never
-    # offered to a model, and the UI must not be the place that quietly
-    # bypasses that by building a prompt for one. Rendering the refusal is the
-    # honest thing to show: it is why most rows have no AI section at all.
-    if row.category not in AI_ELIGIBLE_CATEGORIES:
+    if not panel.eligible_for_model:
         return (
-            f'<p class="note">Not eligible for the model: <code>'
-            f"{_esc(row.category_or_placeholder)}</code> is decided by rules "
+            '<p class="note">Not eligible for the model: decided by rules '
             "(PDD 6.1), so no hypothesis is requested.</p>"
         )
-
-    probe = Exception_(
-        exception_id=row.exception_id,
-        category=row.category,
-        amount=row.amount,
-        status=row.status,
-        confidence=row.confidence,
-        evidence_row_ids=evidence,
-        reason="",
-        resolved_by=None,
-        first_seen_day=row.day_opened,
-        confirmed_day=row.day_confirmed,
-        closed_day=None,
-        audit=(),
-    )
-    try:
-        offered = generate(canonical or probe, dataset, config, client)
-    except FixtureMissError:
+    if panel.no_recording or not panel.hypotheses:
         return (
             '<p class="note">No model response was recorded for this exception. '
-            "Fixtures exist for a 40-decision sample; see "
-            "<code>fixtures/llm_manifest.json</code>.</p>"
+            "See <code>fixtures/llm_manifest.json</code>.</p>"
         )
-    if not offered:
-        return '<p class="note">The model returned nothing schema-valid for this exception.</p>'
-
-    parts: list[str] = []
-    winner: int | None = None
-    for hypothesis in offered:
-        result = verify(hypothesis, dataset, config)
-        if result.passed and winner is None:
-            winner = hypothesis.rank
-        verdict = (
+    items = "".join(
+        f"<li><b>rank {h.rank}</b> nominates <code>{_esc(h.candidate_id)}</code> — "
+        + (
             '<b style="color:#1a7f37">VERIFIED</b>'
-            if result.passed
-            else f'<span class="reject">REJECTED — {_esc(result.failure_reason)}</span>'
+            if h.passed
+            else f'<span class="reject">REJECTED — {_esc(h.failure_reason)}</span>'
         )
-        parts.append(
-            f"<li><b>rank {hypothesis.rank}</b> nominates "
-            f"<code>{_esc(hypothesis.candidate_id)}</code> — {verdict}"
-            f'<br><span class="note">{_esc(hypothesis.reason)}</span></li>'
-        )
+        + f'<br><span class="note">{_esc(h.reason)}</span></li>'
+        for h in panel.hypotheses
+    )
     header = (
-        f'<p class="note">The verifier took <b>rank {winner}</b>; '
-        f"{winner} higher-ranked hypothes{'is was' if winner == 1 else 'es were'} "
-        "rejected first.</p>"
-        if winner
+        f'<p class="note">The verifier took <b>rank {panel.winning_rank}</b>.</p>'
+        if panel.winning_rank is not None
         else '<p class="note">No hypothesis survived verification.</p>'
     )
-    return f"{header}<ol style='margin:4px 0'>{''.join(parts)}</ol>"
+    return f"{header}<ol style='margin:4px 0'>{items}</ol>"
 
 
-def _verification_html(
-    row: QueueRow, dataset: DayDataset, config: AppConfig, evidence: tuple[str, ...]
-) -> str:
+def _verification_html(panel: EvidencePanel) -> str:
     """Which check passed or failed, BY NAME, and the residual where one exists."""
-    from settlesense.ai.hypothesis import Hypothesis
-
-    if len(evidence) != 2:
-        return '<p class="note">No structural claim applies to this exception.</p>'
-    probe = Hypothesis(
-        category=str(row.category),
-        candidate_id=evidence[0],
-        assertion=None,
-        residual_amount=None,
-        evidence_row_ids=evidence,
-        reason="",
-        rank=0,
-    )
-    result = verify(probe, dataset, config)
-    checks = ", ".join(result.checks_run) or "none"
+    if not panel.verification_ran:
+        return (
+            '<p class="note">No hypothesis-level check applies: this exception was '
+            "settled by the deterministic passes, and the audit trail below is the "
+            "record of that.</p>"
+        )
+    checks = ", ".join(panel.checks_run) or "none"
     residual = (
         "no residual applies to this category"
-        if result.computed_residual is None
-        else f"computed residual {result.computed_residual}"
+        if panel.computed_residual is None
+        else f"computed residual {panel.computed_residual}"
     )
-    verdict = "PASSED" if result.passed else "FAILED"
     detail = (
-        f"<br><span class='reject'>{_esc(result.failure_reason)}</span>"
-        if not result.passed
+        f"<br><span class='reject'>{_esc(panel.verification_failure)}</span>"
+        if not panel.verification_passed
         else ""
     )
     return (
-        f"<p><b>{verdict}</b> — checks run: <code>{_esc(checks)}</code><br>"
-        f'<span class="note">{_esc(residual)}</span>{detail}</p>'
+        f"<p><b>{'PASSED' if panel.verification_passed else 'FAILED'}</b> — checks run: "
+        f'<code>{_esc(checks)}</code><br><span class="note">{_esc(residual)}</span>{detail}</p>'
     )
 
 
-def _audit_html(row: QueueRow) -> str:
-    if not row.audit:
+def _audit_html(panel: EvidencePanel) -> str:
+    if not panel.audit:
         return '<p class="note">No audit entries.</p>'
     lines = "\n".join(
         f"day {entry.arrival_day:>3} seq {entry.sequence:>3} │ "
         f"{_esc(entry.from_status or '—'):<22} → {_esc(entry.to_status):<18} "
         f"{_esc(entry.actor):<14} {_esc(entry.note)}"
-        for entry in row.audit
+        for entry in panel.audit
     )
     return f'<div class="chain">{lines}</div>'
 
 
-def _row_html(
-    row: QueueRow,
-    dataset: DayDataset,
-    config: AppConfig,
-    evidence: dict[str, tuple[str, ...]],
-    client: ReplayLLMClient,
-    expanded: bool = False,
-    pair_exceptions: dict[tuple[str, ...], Any] | None = None,
-) -> str:
+def _row_html(row: QueueRow, panel: EvidencePanel, expanded: bool = False) -> str:
+    """Layout only. Every value comes from `row` or `panel`."""
     cells = as_display_dict(row)
+    numeric = {"Amount", "Confidence", "Day opened", "Day confirmed"}
     tds = "".join(
         f'<td class="num">{_esc(cells[name])}</td>'
-        if name in {"Amount", "Confidence", "Day opened", "Day confirmed"}
+        if name in numeric
         else (f"<td>{_pill(row)}</td>" if name == "Status" else f"<td>{_esc(cells[name])}</td>")
         for name in COLUMNS
     )
-    ev = evidence.get(row.exception_id, ())
-    reason = abstention_reason(row)
     competing = (
         '<p class="note">Competing candidates: '
-        + " vs ".join(f"<code>{_esc(row_id)}</code>" for row_id in ev)
+        + " vs ".join(f"<code>{_esc(row_id)}</code>" for row_id in panel.competing)
         + ". Neither can be eliminated on the evidence, so neither is chosen.</p>"
-        if len(ev) == 2 and row.status in RESIDUAL_STATES
+        if panel.competing
         else ""
     )
     abstain = (
-        f"<h4>4 · Abstention</h4><p>{_esc(reason)}</p>{competing}"
-        if reason
-        else (
-            "<h4>4 · Abstention</h4><p class='note'>Not abstained — this exception "
-            "was resolved.</p>"
-        )
+        f"<p>{_esc(panel.abstention)}</p>{competing}"
+        if panel.abstention
+        else "<p class='note'>Not abstained — this exception was resolved.</p>"
     )
-    panel = (
+    body = (
         '<div class="panel">'
-        f"<h4>1 · Money trail</h4>{_money_trail_html(row, dataset, ev)}"
-        f"<h4>2 · AI hypothesis</h4>"
-        f"{_ai_html(row, dataset, config, ev, client, pair_exceptions)}"
-        f"<h4>3 · Verification</h4>{_verification_html(row, dataset, config, ev)}"
-        f"{abstain}"
-        f"<h4>5 · Audit trail</h4>{_audit_html(row)}"
+        f"<h4>1 · Money trail</h4>{_trail_html(panel)}"
+        f"<h4>2 · AI hypothesis</h4>{_hypotheses_html(panel)}"
+        f"<h4>3 · Verification</h4>{_verification_html(panel)}"
+        f"<h4>4 · Abstention</h4>{abstain}"
+        f"<h4>5 · Audit trail</h4>{_audit_html(panel)}"
         "</div>"
     )
     return (
         f"<tr>{tds}</tr>"
         f'<tr><td colspan="{len(COLUMNS)}" style="border-top:none">'
         f"<details{' open' if expanded else ''}>"
-        f"<summary>evidence for {_esc(row.exception_id)}</summary>{panel}</details>"
+        f"<summary>evidence for {_esc(row.exception_id)}</summary>{body}</details>"
         "</td></tr>"
     )
 
@@ -393,30 +314,21 @@ def render_page(
     from eval.run_ai import duplicate_exceptions
 
     pair_exceptions = {pair.evidence_row_ids: pair for pair in duplicate_exceptions(dataset)}
-    body = "".join(
-        _row_html(
-            row,
-            dataset,
-            config,
-            evidence,
-            client,
-            row.exception_id == expand_id,
-            pair_exceptions,
+    panels = {
+        row.exception_id: evidence_panel(
+            row, evidence[row.exception_id], dataset, config, client, pair_exceptions
         )
         for row in shown
+    }
+    body = "".join(
+        _row_html(row, panels[row.exception_id], row.exception_id == expand_id) for row in shown
     )
     header = "".join(f"<th>{_esc(name)}</th>" for name in COLUMNS)
     verified = ", ".join(
         f"{sum(1 for row in rows if row.verified_by == value)} {value}"
         for value in sorted({row.verified_by for row in rows})
     )
-    truncation = (
-        f'<p class="caption">Showing the {len(shown)} largest of {len(rows)} tracked '
-        f"exceptions, sorted by amount. Nothing is hidden by filtering — the rest are "
-        f"smaller.</p>"
-        if len(shown) < len(rows)
-        else f'<p class="caption">All {len(rows)} tracked exceptions.</p>'
-    )
+    truncation = f'<p class="caption">{_esc(scope_notice(len(shown), len(rows)))}</p>'
     day_note = f"day {day}" if day is not None else f"all days ({', '.join(str(d) for d in days)})"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">

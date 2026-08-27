@@ -104,10 +104,24 @@ that 480 of 507 decisions share:
 > structural facts do not distinguish them. The nomination cannot be checked
 > independently, and confirming it would be deferring to the model.
 
-Rendered by [`reports/ui/queue.html`](reports/ui/queue.html); `make ui` serves
-the same data through Streamlit. Both views render sections 1–5 from one
-`EvidencePanel` and compute nothing themselves — neither may defer to the other,
-which is asserted rather than intended.
+`make ui` serves the same data through Streamlit — the interactive view, with
+the residual chart pinned at a zero y-axis and labelled with real arrival days:
+
+![Streamlit view](reports/ui/streamlit-queue.png)
+
+**Both views are proved to agree, not asserted to.** `tests/test_view_parity.py`
+extracts every displayed value from each renderer — all 339 rows × 10 columns,
+plus each panel's ranked hypotheses, named checks, abstention reason and
+competing candidates — and compares them field by field. An AST check forbids
+either renderer from computing a category, amount, status or verdict of its
+own, and a planted control tampers with one renderer and requires parity to
+break. That guard exists because this divergence shipped twice: once on
+evidence resolution for 333 of 339 rows, and once when the static page was
+still calling the verifier itself while the README said it wasn't.
+
+Each view states its own scope in the same words — the page shows the 40
+largest, the app scrolls all 339 — because a table that does not say whether it
+is filtered is the wrong kind of ambiguity in an honest exception list.
 
 ### Throughput — dev seed (`make bench`)
 

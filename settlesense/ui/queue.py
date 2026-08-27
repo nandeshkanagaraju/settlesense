@@ -631,6 +631,44 @@ def evidence_panel(
     )
 
 
+def scope_notice(shown: int, total: int) -> str:
+    """What the reader is looking at: all of it, or the top N of it.
+
+    ONE SENTENCE, BOTH VIEWS, AND IT MUST BE TRUE OF THE VIEW THAT SHOWS IT.
+    The static page renders the 40 largest; Streamlit scrolls all 339. Copying
+    the page's number into the app would be a false statement about the app,
+    and in a view whose purpose is an honest exception list that is the wrong
+    kind of ambiguity - a reviewer scrolling a table cannot otherwise tell
+    whether they are seeing everything or a filtered subset.
+    """
+    if shown >= total:
+        return (
+            f"All {total:,} tracked exceptions, sorted by amount. Nothing is hidden "
+            "by filtering; the table scrolls."
+        )
+    return (
+        f"Showing the {shown:,} largest of {total:,} tracked exceptions, sorted by "
+        "amount. Nothing is hidden by filtering — the rest are smaller."
+    )
+
+
+CATEGORY_COLUMNS = ("Detected as", "Resolved as")
+CATEGORY_COLUMN_PIXELS = 210
+"""Wide enough for the longest taxonomy category, with room to spare.
+
+MEASURED, not guessed: `MISSING_VS_LATE_CREDIT` is 22 characters, and
+`st.dataframe` draws to a CANVAS - the text is not in the DOM, so a clipped
+cell cannot be caught by a test that inspects the page. `test_view_parity.py`
+asserts the width is at least the longest category needs; the rendering itself
+is checked by eye in reports/ui/streamlit-queue.png.
+"""
+"""Columns that must render a full taxonomy category, never a clipped one.
+
+A clipped `MISSING_VS_LATE_CRED[` reads as a data error rather than a column
+width, and this is the view whose whole purpose is an honest exception list.
+"""
+
+
 SEQUENCE_CAPTION = (
     "Open batch links rise before they fall: day 12 delivers batches whose credit "
     "is not yet due. A residual is a queue, not a burn-down."

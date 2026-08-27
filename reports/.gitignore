@@ -46,4 +46,5 @@ ai/*
 ui/*
 !ui/queue.html
 !ui/evidence-queue.png
+!ui/streamlit-queue.png
 !ui/evidence-panel.png

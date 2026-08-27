@@ -95,6 +95,20 @@ Each of these was added after a defect of that exact shape reached a green test
 suite. They are recorded here rather than in a code comment because each one
 generalises past the file that produced it.
 
+**A text scanner matches its own documentation. Every guard walks the AST and
+skips docstrings.**
+
+Six occurrences here. A clock-guard flagged `telemetry.py` for a docstring
+naming `date.today()` while explaining why it is forbidden; an AI-cost guard
+flagged the paragraph explaining why `0.000s` is not printed; a holdout-seed
+guard flagged the comment reading "never 999"; a truth-leak guard flagged
+`types.py` for naming `true_category` in a comment about scoring; a chart guard
+flagged the docstring saying "Altair, not st.line_chart"; and a
+never-writes guard flagged "the choice was to fill them in or to delete the
+app". Each was a green-to-red failure on prose, which is the cheap direction -
+the expensive one is a scanner that matches nothing and reports green forever.
+The fix in every case was to parse rather than grep.
+
 **A default that silently widens a query is the same class of defect as a count
 derived by subtraction. Where a function can answer several questions, make the
 caller name which one.**

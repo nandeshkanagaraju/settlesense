@@ -27,6 +27,8 @@ from eval.run_eval import load_days
 from settlesense.config import load_config
 from settlesense.exceptions.store import Population
 from settlesense.ui.queue import (
+    CATEGORY_COLUMN_PIXELS,
+    CATEGORY_COLUMNS,
     SEQUENCE_CAPTION,
     EvidencePanel,
     arrival_days,
@@ -38,6 +40,7 @@ from settlesense.ui.queue import (
     open_store,
     population_summaries,
     residual_sequence,
+    scope_notice,
 )
 
 DB_PATH = Path("reports/ui/state.db")
@@ -99,7 +102,20 @@ def main() -> None:  # pragma: no cover - requires a Streamlit runtime
             + ". Nearly every resolution is a rule, not a model. **Detected as** is the "
             "category at first sight; **Resolved as** is what closed it."
         )
-        st.dataframe([as_display_dict(row) for row in rows], hide_index=True)
+        # EXPLICIT PIXEL WIDTHS on the category columns. The default sizing
+        # clipped MISSING_VS_LATE_CREDIT to "MISSING_VS_LATE_CRED[", which
+        # reads as a data error rather than a column width. `st.dataframe`
+        # draws to a canvas, so this cannot be asserted from the DOM - the
+        # width is asserted instead, and the render checked by eye.
+        st.dataframe(
+            [as_display_dict(row) for row in rows],
+            hide_index=True,
+            column_config={
+                name: st.column_config.TextColumn(name, width=CATEGORY_COLUMN_PIXELS)
+                for name in CATEGORY_COLUMNS
+            },
+        )
+        st.caption(scope_notice(len(rows), len(rows)))
 
         st.subheader("Evidence")
         # DEFAULT TO A DUPLICATE PAIR. Both halves identical at every step is

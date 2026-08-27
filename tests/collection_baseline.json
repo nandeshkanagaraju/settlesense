@@ -6,7 +6,7 @@
     "tests/test_bench.py": 22,
     "tests/test_config_completeness.py": 24,
     "tests/test_determinism_guard.py": 17,
-    "tests/test_env_integrity.py": 68,
+    "tests/test_env_integrity.py": 69,
     "tests/test_eval_set.py": 49,
     "tests/test_file_reading_contract.py": 16,
     "tests/test_gen_ids.py": 9,
@@ -37,7 +37,8 @@
     "tests/test_timing.py": 20,
     "tests/test_truth_independence.py": 11,
     "tests/test_types_money.py": 33,
-    "tests/test_verbosity_honoured.py": 8
+    "tests/test_verbosity_honoured.py": 8,
+    "tests/test_view_parity.py": 9
   },
-  "total": 1012
+  "total": 1022
 }
