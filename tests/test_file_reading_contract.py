@@ -21,6 +21,7 @@ inheriting nothing. That is the difference between a rule and a note.
 from __future__ import annotations
 
 import ast
+import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -46,6 +47,7 @@ REGISTERED_READERS = frozenset(
         "settlesense/config.py",
         "eval/run_eval.py",
         "eval/run_eval_ai.py",
+        "eval/bench.py",
         "eval/run_ai.py",
         "eval/record_fixtures.py",
         "settlesense/exceptions/store.py",
@@ -270,6 +272,53 @@ def test_input_rows_tells_a_missing_dataset_from_an_empty_one(tmp_path: Path) ->
     print(f"\n  missing -> SystemExit({missing[:40]}...); empty -> {empty}")
 
 
+def _bench_manifest_missing(tmp: Path) -> str:
+    """No recording manifest at all. The model was never called for this tree."""
+    import eval.bench as bench
+
+    original = bench.FIXTURE_MANIFESTS
+    try:
+        bench.FIXTURE_MANIFESTS = (tmp / "absent.json",)
+        assert bench._manifest_totals() is None
+    finally:
+        bench.FIXTURE_MANIFESTS = original
+    return "no manifest: cost not measured"
+
+
+def _bench_manifest_empty(tmp: Path) -> str:
+    """A manifest that EXISTS and records ZERO decisions. Legitimate data.
+
+    Distinct from the case above, and the distinction is not cosmetic: this one
+    reaches `RecordingCost.per_decision()`, which divides by the decision count.
+    Treating "recorded nothing" as "recorded a total of Rs 0" would either crash
+    on the division or print Rs 0.00 per decision, and a reader cannot tell that
+    apart from a model that is free.
+    """
+    import eval.bench as bench
+
+    path = tmp / "empty_manifest.json"
+    path.write_text(
+        json.dumps(
+            {
+                "recorded": 0,
+                "measured_cost_usd": "0.000000",
+                "measured_cost_inr": "0.00",
+                "measured_input_tokens": 0,
+                "measured_output_tokens": 0,
+                "model": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    original = bench.FIXTURE_MANIFESTS
+    try:
+        bench.FIXTURE_MANIFESTS = (path,)
+        assert bench._manifest_totals() is None, "zero decisions became a priced result"
+    finally:
+        bench.FIXTURE_MANIFESTS = original
+    return "manifest present, zero decisions: still not measured"
+
+
 def _store_missing(tmp: Path) -> str:
     """A day file that was never delivered."""
     from settlesense.exceptions.store import ExceptionStore, MissingFileError
@@ -347,6 +396,7 @@ CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "settlesense/config.py": (_config_missing, _config_empty),
     "eval/run_eval.py": (_run_eval_missing, _run_eval_empty),
     "eval/run_eval_ai.py": (_run_eval_ai_missing, _run_eval_ai_empty),
+    "eval/bench.py": (_bench_manifest_missing, _bench_manifest_empty),
     "eval/run_ai.py": (_run_ai_missing, _run_ai_empty),
     "eval/record_fixtures.py": (_record_missing, _record_empty),
     "settlesense/exceptions/store.py": (_store_missing, _store_empty),

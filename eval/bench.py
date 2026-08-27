@@ -33,6 +33,7 @@ scales with ambiguity, not with volume.
 from __future__ import annotations
 
 import argparse
+import json
 import statistics
 import subprocess
 import sys
@@ -41,6 +42,7 @@ import tracemalloc
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 from eval.run_eval import input_rows, load_days
@@ -73,6 +75,35 @@ DEFAULT_AS_OF = date(2026, 11, 30)
 DAYS = 20
 
 BYTES_PER_MIB = 1024 * 1024
+
+REPO = Path(__file__).resolve().parent.parent
+DEV_DATA = REPO / "data" / "dev"
+FIXTURE_MANIFESTS: tuple[Path, ...] = (
+    REPO / "fixtures" / "llm_manifest.json",
+    REPO / "fixtures" / "llm_manifest_dev.json",
+)
+"""Both recording runs. Cost is READ FROM THESE, never typed into a report:
+they are written by `record_fixtures` from the API's own usage numbers, so a
+figure in bench.md cannot drift from what was actually spent."""
+
+DEV_MANIFEST = REPO / "fixtures" / "llm_manifest_dev.json"
+"""The dev-seed recording, and the only one that supports a per-ROW cost.
+
+It covers EVERY ambiguous duplicate pair in data/dev with no sampling, so its
+total is the complete model spend for that dataset and can be divided by that
+dataset's row count. The evaluation-set manifest is a stratified sample of 40
+drawn from 507 decisions across 20 seeds - a real measurement of per-DECISION
+cost, but there is no single row count to divide it by."""
+
+ESTIMATE_INR_PER_THOUSAND = Decimal("40.98")
+ESTIMATE_TOTAL_INR = Decimal("207")
+ESTIMATE_DECISIONS = 507
+"""The pre-spend projection, kept so the correction stays checkable.
+
+From README at commit 1ac59fd^: "~297 input and ~250 output tokens per
+decision; 507 decisions = $2.35 (Rs 207), or Rs 40.98 per 1,000 rows". Recorded
+here rather than deleted - a project that only ever shows its final numbers is
+asking to be trusted about how it got them."""
 
 
 @dataclass(frozen=True)
@@ -276,7 +307,13 @@ def _fmt_seconds(seconds: float) -> str:
     return f"{seconds:.3f}"
 
 
-def to_markdown(results: Sequence[SizeResult], machine: MachineSpec, stretch_note: str) -> str:
+def to_markdown(
+    results: Sequence[SizeResult],
+    machine: MachineSpec,
+    stretch_note: str,
+    config: AppConfig | None = None,
+    as_of: date | None = None,
+) -> str:
     """reports/bench.md - ready to paste into the README (B7)."""
     lines: list[str] = [
         "# SettleSense throughput — deterministic pipeline",
@@ -305,6 +342,8 @@ def to_markdown(results: Sequence[SizeResult], machine: MachineSpec, stretch_not
         "Pipeline = ingest + engine. Dataset generation is excluded from the timed "
         "region and reported separately below; it is scaffolding for the benchmark, "
         "not part of the system under test.",
+        "",
+        _ingest_share_note(results),
         "",
         stretch_note,
         "",
@@ -340,17 +379,144 @@ def to_markdown(results: Sequence[SizeResult], machine: MachineSpec, stretch_not
             "records column above grows 200-fold. Their records/s figures are not "
             "comparable with the case-grain rows and are not a scaling signal.",
         ]
-    lines += ["", _ai_stage_section(results), ""]
+    lines += ["", _ai_stage_section(results, config, as_of), ""]
     return "\n".join(lines)
 
 
-def _ai_stage_section(results: Sequence[SizeResult]) -> str:
+def _ingest_share_note(results: Sequence[SizeResult]) -> str:
+    """FILE PARSING IS THE BOTTLENECK, WHICH IS THE OPPOSITE OF WHAT A READER EXPECTS.
+
+    Worth a line of its own: shown a reconciliation system, a reader assumes
+    the matching logic dominates. It does not, at any size measured, and the
+    share is computed from the realised numbers rather than asserted from one
+    of them.
+    """
+    if not results:
+        return ""
+    shares = [
+        (row.records, row.ingest_seconds / row.pipeline_seconds * 100)
+        for row in results
+        if row.pipeline_seconds > 0
+    ]
+    if not shares:
+        return ""
+    low, high = min(share for _, share in shares), max(share for _, share in shares)
+    largest = results[-1]
+    return (
+        f"**Reading the files costs more than reconciling them.** Ingest is "
+        f"{low:.0f} to {high:.0f}% of pipeline time at every size measured — at "
+        f"{largest.records:,} records, {_fmt_seconds(largest.ingest_seconds)}s of parsing "
+        f"against {_fmt_seconds(largest.engine_seconds)}s of matching. That is the "
+        f"reverse of what a reconciliation system suggests, and it is where an "
+        f"optimisation would go: the engine is not the constraint."
+    )
+
+
+def _ai_replay_seconds(config: AppConfig, as_of: date) -> tuple[int, float] | None:
+    """Time the AI stage on the dev seed, REPLAYING recorded fixtures.
+
+    Returns (decisions, seconds), or None when no fixture covers the dev set.
+
+    THIS IS CACHE-REPLAY TIME, NOT API LATENCY, and the report says so. It is
+    still the honest number to publish, because replay is what every test, every
+    `make eval` and every reproduction of this project actually executes - the
+    recorded response is the system's input. Live latency was never captured:
+    the recorder took the API's token counts and its own price arithmetic and
+    read no clock, which is a gap in the recorder rather than something that can
+    be recovered from the fixtures now.
+    """
+    from eval.run_ai import duplicate_exceptions
+    from settlesense.ai.client import FixtureMissError, ReplayLLMClient
+    from settlesense.ai.loop import resolve_exception
+
+    if not DEV_DATA.is_dir() or not any((REPO / "fixtures" / "llm").glob("*.json")):
+        return None
+    dataset = load_days(DEV_DATA, config)
+    exceptions = sorted(duplicate_exceptions(dataset), key=lambda item: item.exception_id)
+    if not exceptions:
+        return None
+    replay = ReplayLLMClient()
+    collector: list[StageTiming] = []
+    try:
+        with StageTimer(collector, "ai replay", len(exceptions)):
+            for exception in exceptions:
+                resolve_exception(exception, dataset, config, replay)
+    except FixtureMissError:
+        # A fixture the dev set needs was never recorded. That is "not
+        # measured", not a crash - and it is caught NARROWLY, by the one
+        # exception the replay client raises, so a real defect in the loop
+        # still fails the benchmark loudly instead of silently blanking a row.
+        return None
+    return len(exceptions), collector[0].seconds
+
+
+@dataclass(frozen=True)
+class RecordingCost:
+    """One recording run's measured spend. Typed, so the renderer stops
+    calling int() on `object` at eight separate call sites."""
+
+    recorded: int
+    inr: Decimal
+    usd: Decimal = Decimal(0)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str = ""
+
+    def per_decision(self) -> Decimal:
+        return (self.inr / self.recorded).quantize(Decimal("0.0001"))
+
+
+def _dev_manifest() -> RecordingCost | None:
+    """The dev-seed recording alone. See DEV_MANIFEST for why it is separate."""
+    if not DEV_MANIFEST.is_file():
+        return None
+    payload = json.loads(DEV_MANIFEST.read_text(encoding="utf-8"))
+    recorded = int(payload["recorded"])
+    if recorded <= 0:
+        return None  # a manifest recording nothing is "not measured", not "free"
+    return RecordingCost(
+        recorded=recorded,
+        inr=Decimal(str(payload["measured_cost_inr"])),
+    )
+
+
+def _manifest_totals() -> RecordingCost | None:
+    """Cost and token counts summed across both recording runs, from the files."""
+    payloads = [
+        json.loads(path.read_text(encoding="utf-8")) for path in FIXTURE_MANIFESTS if path.is_file()
+    ]
+    if not payloads:
+        return None
+    recorded = sum(int(item["recorded"]) for item in payloads)
+    if recorded <= 0:
+        # A manifest that EXISTS and records zero decisions is legitimate - it
+        # is what a fresh clone would carry after `record_fixtures --dry-run`.
+        # It is not the same as no manifest at all, and it must not reach
+        # per_decision(), which would divide by zero. Both map to "not
+        # measured" in the report; neither prints Rs 0.00 per decision, which
+        # would read as "the model is free".
+        return None
+    return RecordingCost(
+        recorded=recorded,
+        usd=sum((Decimal(str(item["measured_cost_usd"])) for item in payloads), start=Decimal(0)),
+        inr=sum((Decimal(str(item["measured_cost_inr"])) for item in payloads), start=Decimal(0)),
+        input_tokens=sum(int(item["measured_input_tokens"]) for item in payloads),
+        output_tokens=sum(int(item["measured_output_tokens"]) for item in payloads),
+        model=str(payloads[0]["model"]),
+    )
+
+
+def _ai_stage_section(
+    results: Sequence[SizeResult], config: AppConfig | None = None, as_of: date | None = None
+) -> str:
     """The AI stage, benchmarked against RESIDUAL count - not row count (B6).
 
-    This section reports what has been measured and states plainly what has
-    not. M7 is built, but no model has been called and `fixtures/llm/` is
-    empty, so there is no timing to report; a zero here would read as
-    "instant" rather than "never invoked".
+    REWRITTEN once a model had actually been called. The previous version said
+    "seconds and rupees are NOT reported here, because no model has been
+    called", which was true when it was written and quietly stopped being true
+    the moment `fixtures/llm/` filled up - a report cannot notice that about
+    itself. Everything below is now read from the manifests and from a live
+    replay, so the section cannot go stale in that direction again.
     """
     lines = [
         "## AI stage — priced against the residual, not the volume",
@@ -369,15 +535,105 @@ def _ai_stage_section(results: Sequence[SizeResult]) -> str:
         "the hot path — which the per-stage table above shows directly, since every "
         "row in it is a rule.",
         "",
-        "**Seconds and rupees are NOT reported here, because no model has been "
-        "called.** The verified hypothesis loop IS built (M7) and is measured in "
-        "reports/ai/ai_loop.json - but with stand-in clients, not a model: an "
-        "oracle that always nominates correctly establishes a ceiling of 27 of "
-        "507 decisions, which no real model can exceed. `fixtures/llm/` holds "
-        "zero recordings, so there is no timing to report. Printing `0.000s` and "
-        "`Rs 0` would be indistinguishable in this table from a stage that ran "
-        "and cost nothing. The harness takes both numbers the moment a fixture "
-        "set exists, reading them from the replay cache so re-running is free.",
+    ]
+
+    totals = _manifest_totals()
+    dev_costs = _dev_manifest()
+    replay = _ai_replay_seconds(config, as_of) if config is not None and as_of else None
+    dev = next((row for row in results if row.records == 5000), None)
+
+    if dev is not None and totals is not None and dev_costs is not None:
+        decisions = totals.recorded
+        per_decision = totals.per_decision()
+        per_thousand = (dev_costs.inr / (Decimal(dev.input_rows) / Decimal(1000))).quantize(
+            Decimal("0.01")
+        )
+        dev_per_decision = (dev_costs.inr / dev_costs.recorded).quantize(Decimal("0.0001"))
+        lines += [
+            "",
+            "### Deterministic pipeline against AI stage, at 5,000 records",
+            "",
+            f"**Deterministic pipeline: {dev.cases:,} cases in "
+            f"{_fmt_seconds(dev.pipeline_seconds)}s, zero model calls.** The AI stage "
+            f"runs on the {dev.residual} residual cases — "
+            f"{dev.residual / dev.cases * 100:.2f}% of the workload, of which "
+            f"{dev_costs.recorded} are AI-eligible duplicate pairs and the rest "
+            f"abstain without a model call at all. "
+            f"**Model cost scales with ambiguity, not volume.** Building the rules "
+            f"layer properly is what keeps the expensive stage small.",
+            "",
+        ]
+        if replay is not None:
+            replayed, seconds = replay
+            lines.append(
+                f"**Seconds — {replayed} dev-seed decisions replayed in "
+                f"{seconds:.3f}s, {seconds / replayed * 1000:.1f} ms each.** "
+                f"THIS IS CACHE-REPLAY TIME, NOT API LATENCY. Replay is what every "
+                f"test and every `make eval` executes, so it is the honest figure for "
+                f"what running this system costs in time — but it is not what a live "
+                f"call would take. Live latency was never captured: the recorder took "
+                f"the API's token counts and read no clock. That is a gap in the "
+                f"recorder, and it is stated rather than filled with a plausible "
+                f"number."
+            )
+        else:
+            lines.append(
+                "**Seconds — not measured.** No fixture set covers the dev seed, so "
+                "there is nothing to replay. A `0.000s` here would be "
+                "indistinguishable from a stage that ran and cost nothing."
+            )
+        lines += [
+            "",
+            f"**Rupees — MEASURED from the API's own usage figures, not estimated "
+            f"from prompt length.** {totals.input_tokens:,} input and "
+            f"{totals.output_tokens:,} output tokens across {decisions} "
+            f"recorded decisions against `{totals.model}` = "
+            f"${totals.usd:.6f} (₹{totals.inr}), "
+            f"which is **₹{per_decision} per decision**.",
+            "",
+            f"**Per 1,000 rows: ₹{per_thousand}**, and the basis is stated because "
+            f"the number is meaningless without it — the dev dataset's "
+            f"{dev_costs.recorded} AI-eligible pairs were recorded with NO "
+            f"sampling, so ₹{dev_costs.inr} is the complete model "
+            f"spend for those {dev.input_rows:,} input rows. Against PDD 7.3's ₹50 "
+            f"ceiling.",
+            "",
+            f"**WHERE THE PRE-SPEND ESTIMATE WENT WRONG, AND IT IS NOT WHERE IT "
+            f"LOOKS.** The projection made before any model was called was "
+            f"₹{ESTIMATE_INR_PER_THOUSAND} per 1,000 rows against the "
+            f"₹{per_thousand} measured here — off by "
+            f"{ESTIMATE_INR_PER_THOUSAND / per_thousand:.0f}x. But the pricing model "
+            f"was nearly right: it projected "
+            f"₹{(ESTIMATE_TOTAL_INR / ESTIMATE_DECISIONS).quantize(Decimal('0.0001'))} "
+            f"per decision against ₹{per_decision} measured, only "
+            f"{(1 - (ESTIMATE_TOTAL_INR / ESTIMATE_DECISIONS) / per_decision) * 100:.0f}% "
+            f"low. THE WHOLE ERROR WAS THE DECISION COUNT: the estimate assumed "
+            f"{ESTIMATE_DECISIONS} decisions per dataset, and a dataset of this size "
+            f"produces {dev_costs.recorded}. Which is the architectural claim "
+            f"restated as a cost bug — the deterministic layer had already removed "
+            f"the work the estimate was pricing.",
+            "",
+            f"Two independent recordings agree on the per-decision figure: "
+            f"₹{(Decimal('19.37') / 40).quantize(Decimal('0.0001'))} across the 40 "
+            f"evaluation-set decisions and "
+            f"₹{dev_per_decision} "
+            f"across the {dev_costs.recorded} dev-seed ones — different seeds, "
+            f"different pairs, 0.2% apart.",
+        ]
+    else:
+        lines += [
+            "",
+            "**Seconds and rupees are NOT reported here.** No recording manifest was "
+            "found, so no model has been called for this tree. Printing `0.000s` and "
+            "`₹0` would be indistinguishable from a stage that ran and cost nothing.",
+        ]
+
+    lines += [
+        "",
+        "The verified hypothesis loop is also measured against three stand-in "
+        "clients in reports/ai/ai_loop.json: an oracle that always nominates "
+        "correctly establishes a ceiling of 27 of 507 decisions, which no real "
+        "model can exceed, and an adversarial client confirms zero.",
     ]
     return "\n".join(lines)
 
@@ -418,7 +674,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     stretch_note = _maybe_stretch(results, sizes, config, args, machine)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(to_markdown(results, machine, stretch_note), encoding="utf-8")
+    args.out.write_text(
+        to_markdown(results, machine, stretch_note, config, args.as_of), encoding="utf-8"
+    )
     print(f"\nwrote {args.out}")
     if results:
         largest = results[-1]

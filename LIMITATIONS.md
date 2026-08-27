@@ -62,6 +62,12 @@ means a second run. Test 22 asserts `reports/eval-holdout/throughput.md` does
 not exist, so the row cannot be quietly filled in later — the only way that file
 could appear is the run that must not happen.
 
+**The separation held in practice, not only in tests.** `reports/eval/results.json`
+was byte-identical before and after the commit that wired the timer in — checked
+against a copy taken beforehand, not inferred from the test that asserts it.
+That is the M5a property doing its job on a real change: instrumentation was
+added to the path that produces the artifact, and the artifact did not move.
+
 Two things the wiring exposed immediately, which is the argument for having
 done it:
 

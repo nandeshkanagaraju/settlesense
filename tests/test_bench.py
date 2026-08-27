@@ -20,17 +20,23 @@ Both disagreements have the same root: the AI stage does not exist yet.
     that reports/bench.md explains each absence rather than leaving a gap.
 
   Req 14a asks the AI table to report residual count "alongside seconds and
-  cost". The residual count IS reported and is asserted here. Seconds and cost
-  are NOT, because no model has been called: fixtures/llm/ holds zero
-  recordings. M7 itself IS built - see tests/test_ai.py, where an oracle client
-  establishes a ceiling of 27 of 507 decisions without a model. This file
-  asserts the timing is declared absent rather than printed as zero, and that
-  the fixture directory is still empty - so the day a fixture set is recorded,
-  this test fails and the section has to be filled in.
+  cost". ALL THREE ARE NOW REPORTED. This paragraph used to say seconds and
+  cost were absent because fixtures/llm/ held zero recordings, and it went on
+  saying so after 66 decisions were recorded - the same staleness the bench
+  report itself had, and for the same reason: prose cannot notice that the
+  world moved underneath it. Both are now computed from the manifests and from
+  a live replay, so there is nothing left to go stale in that direction.
+
+  What this file still asserts about the model: the SCALING measurement calls
+  none. That is checked by AST against the timed functions rather than by
+  banning a string, because the AI-stage section legitimately replays cached
+  responses off disk - which is not a model call, and is what every test and
+  every `make eval` in this repo actually executes.
 """
 
 from __future__ import annotations
 
+import ast
 import socket
 import subprocess
 import sys
@@ -327,8 +333,26 @@ def test_14_bench_executes_zero_model_calls(bench_run: tuple[Path, str]) -> None
     assert client.calls == [], "a fresh replay client already has calls recorded"
 
     source = (REPO / "eval" / "bench.py").read_text(encoding="utf-8")
-    for forbidden in ("LLMClient", "openai", "complete("):
+    for forbidden in ("RealLLMClient", "openai", "api_key"):
         assert forbidden not in source, f"the bench harness references {forbidden!r}"
+
+    # NARROWED, DELIBERATELY. This used to ban the string "LLMClient" outright,
+    # and it fired the moment the AI stage began reporting a replayed duration -
+    # correctly, because the rule as written had been broken. But the rule as
+    # MEANT is that the throughput measurement must not call a model, and a
+    # replay client reads a JSON file off disk. So the ban now covers the client
+    # that can dial, and an AST walk confirms the replay client is confined to
+    # the one function that reports the AI stage - never the timed scaling path.
+    timed = {"measure", "run_size", "generate", "to_markdown"}
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.FunctionDef) or node.name not in timed:
+            continue
+        names = {
+            inner.id
+            for inner in ast.walk(node)
+            if isinstance(inner, ast.Name) and "LLMClient" in inner.id
+        }
+        assert not names, f"{node.name}() references {sorted(names)} inside the timed path"
 
     # A 40-decision sample IS now recorded (see fixtures/llm_manifest.json), so
     # the assertion is no longer "no fixtures exist". What must still hold is
@@ -589,16 +613,39 @@ def test_the_throughput_cross_check_can_fail() -> None:
 
 @pytest.mark.hygiene
 def test_the_readme_states_the_machine_and_the_median_rule() -> None:
-    """A throughput number with no machine and no method is a boast."""
+    """A throughput number with no machine and no method is a boast.
+
+    THE MACHINE LINE IS COMPARED WHOLE, against the header `make bench` wrote -
+    not field by field. M5a captures cpu, cores, RAM, Python version and
+    platform automatically, and a README that names three of the five while
+    quietly dropping the other two would pass every individual `in` check. The
+    string has to be the one the benchmark printed, because the point is that a
+    reader can tell which machine produced the numbers.
+    """
     section = _readme_throughput_section()
-    spec = MachineSpec.current()
-    assert spec.cpu in section, f"the README does not name the CPU: {spec.cpu}"
-    assert str(spec.cores) in section, "the README does not state core count"
-    assert "never the best" in section, "the README does not state the median rule"
-    assert "the BENCH calls no model" in section, (
-        "the README does not explain why the throughput table has no AI timing"
+    bench = COMMITTED_BENCH.read_text(encoding="utf-8")
+    header = next(line for line in bench.splitlines() if line.startswith("`") and "cores" in line)
+    assert header in section, (
+        f"the README machine line is not bench.md's header verbatim.\n"
+        f"  bench.md: {header}\n"
+        f"  Retype nothing - copy the line reports/bench.md wrote."
     )
-    print(f"\n  README states machine ({spec.cpu}, {spec.cores} cores) and the median rule")
+
+    spec = MachineSpec.current()
+    for field, value in (
+        ("cpu", spec.cpu),
+        ("cores", str(spec.cores)),
+        ("python", spec.python_version),
+    ):
+        assert value in header, f"MachineSpec.{field} ({value}) is absent from the header"
+
+    assert "never the best" in section, "the README does not state the median rule"
+    assert "Median of 3 repetitions" in section, "the README does not state the run shape"
+    assert "cache-replay time, not api latency" in section.lower(), (
+        "the README quotes an AI-stage duration without saying it is replay rather "
+        "than live API latency"
+    )
+    print(f"\n  README machine line is bench.md's header verbatim: {header}")
 
 
 def _readme_throughput_section() -> str:

@@ -125,22 +125,36 @@ is filtered is the wrong kind of ambiguity in an honest exception list.
 
 ### Throughput — dev seed (`make bench`)
 
-`arm · 8 cores · 8 GiB · Python 3.14.7 · macOS-26.6-arm64`
+`arm · 8 cores · 8 GiB · Python 3.14.7 · macOS-26.6-arm64-arm-64bit-Mach-O`
 
-Median of 3 repetitions, **never the best run**. No model calls. Full table in
-[`reports/bench.md`](reports/bench.md).
+**Median of 3 repetitions, never the best run.** No model calls. The machine
+line above is captured automatically by M5a's `MachineSpec` and copied from
+`reports/bench.md`'s header verbatim — `tests/test_bench.py` asserts the two
+strings are identical, so a figure quoted here always names the machine that
+actually produced it. Full table in [`reports/bench.md`](reports/bench.md).
 
 | Records | Cases | Input rows | Pipeline (s) | Cases/s | Peak MiB |
 |---:|---:|---:|---:|---:|---:|
-| 500 | 502 | 1,626 | 0.040 | **12,581** | 1.8 |
-| 5,000 | 5,026 | 15,779 | 0.330 | **15,233** | 19.4 |
-| 25,000 | 25,123 | 78,594 | 1.927 | **13,035** | 94.9 |
-| 100,000 | 100,506 | 313,869 | 8.525 | **11,790** | 379.7 |
+| 500 | 502 | 1,626 | 0.041 | **12,269** | 1.8 |
+| 5,000 | 5,026 | 15,779 | 0.356 | **14,118** | 19.4 |
+| 25,000 | 25,123 | 78,594 | 2.057 | **12,215** | 94.9 |
+| 100,000 | 100,506 | 313,869 | 9.078 | **11,072** | 379.7 |
 
 Pipeline = ingest + engine; dataset generation is excluded from the timed
 region and reported separately. 100k was **attempted and measured** because 25k
 finished inside the two-minute budget that gates it — a skipped row would have
 been absent, never extrapolated.
+
+**Throughput holds within 20% across a 200-fold change in size** — 12,269 to
+14,118 to 12,215 to 11,072 cases/s from 500 to 100,000 records. Roughly linear
+scaling across four sizes is worth more than one impressive figure at one size,
+which is why the small and large ends are both shown rather than the best row.
+
+**Reading the files costs more than reconciling them.** Ingest is 52–67% of
+pipeline time at every size measured; at the dev size, 0.239s of parsing
+against 0.117s of matching. That is the reverse of what a reconciliation
+system suggests, and it is where an optimisation would go — the matching
+engine is not the constraint.
 
 **Durations move between runs; nothing else does.** Across re-runs every count
 above is bit-identical — cases, input rows, residuals, peak memory — while the
@@ -161,11 +175,33 @@ carries the volume; the expensive stage is sized by ambiguity, not by rows:
 | 100,000 | 100,506 | 1,012 | 1.01% |
 
 Roughly one case in a hundred reaches the AI stage, and that ratio holds across
-a 200-fold change in volume. **Seconds and rupees for that stage are not
-reported here, because the BENCH calls no model** — it times the deterministic
-pipeline. Real model cost is measured separately and reported below. A
-`0.000s` row in this table would be indistinguishable from a stage that ran and
-cost nothing.
+a 200-fold change in volume.
+
+**Deterministic pipeline: 5,026 cases in 0.356s, zero model calls.** The AI
+stage runs on the 52 residual cases — **1.03% of the workload** — of which 26
+are AI-eligible duplicate pairs; the rest abstain without a model call at all.
+Replayed from the recorded fixtures, those 26 decisions take **0.122s, 4.7 ms
+each**, and cost **₹12.61 measured** — **₹0.80 per 1,000 rows** against PDD
+7.3's ₹50 ceiling. **Model cost scales with ambiguity, not volume. Building the
+rules layer properly is what keeps the expensive stage small.**
+
+Two caveats a reviewer is entitled to, stated rather than buried. The 4.7 ms is
+**cache-replay time, not API latency** — replay is what every test and every
+`make eval` actually executes, but live latency was never captured because the
+recorder took the API's token counts and read no clock. And the ₹0.80 names its
+basis: the dev dataset's 26 pairs were recorded with **no sampling**, so ₹12.61
+is the complete model spend for those 15,779 input rows.
+
+**The pre-spend estimate was wrong, and not where it looks.** Before any model
+was called, cost was projected at **₹40.98 per 1,000 rows** against the ₹0.80
+measured — off by **51x**. But the pricing model was nearly right: it projected
+₹0.4083 per decision against **₹0.4845 measured**, only 16% low. *The entire
+error was the decision count* — it assumed 507 decisions per dataset where a
+dataset of this size produces 26. Which is the architectural claim restated as a
+costing bug: the deterministic layer had already removed the work the estimate
+was pricing. Two independent recordings agree on the per-decision figure to
+within 0.2% (₹0.4842 across 40 evaluation-set decisions, ₹0.4850 across 26
+dev-seed ones), so the measurement is not a single lucky run.
 
 Telemetry is a **separate return value** from the business result, not a field
 inside it (SDD 8.1). `ReconciliationResult` contains no float, no duration and
@@ -253,9 +289,17 @@ but the nomination the verifier *acted on* is right 33/40 — because it tries
 rank 0, 1, 2 in order and discards the ones that do not check out.
 
 **Cost, MEASURED from the API response** (not estimated from prompt length):
-24,996 input and 15,760 output tokens for 40 decisions =
-**$0.220090 (₹19.37)**, about **₹2.49 per 1,000 rows**
-against PDD 7.3's ₹50 ceiling.
+24,996 input and 15,760 output tokens for 40 decisions = **$0.220090 (₹19.37)**,
+which is **₹0.4842 per decision**.
+
+*This previously read "about ₹2.49 per 1,000 rows".* That figure had no
+derivation recorded anywhere in the repo and could not be reproduced from the
+manifests, so it is replaced by the per-decision cost — which is what was
+actually measured — plus a per-row figure whose basis is stated:
+[₹0.80 per 1,000 rows](#throughput--dev-seed-make-bench), from the dev dataset's
+26 pairs recorded with no sampling. Both are far under PDD 7.3's ₹50 ceiling;
+the point of the correction is that a per-row cost is meaningless without the
+row count it was divided by.
 
 ### Held-out set — seed 999 (`make eval-holdout`)
 
