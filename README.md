@@ -119,6 +119,20 @@ with instrumentation on and off.
 
 ### AI layer — the verified hypothesis loop (`make eval-ai-loop`)
 
+> **Of 507 duplicate-pair decisions the deterministic engine could not resolve,
+> structural evidence exists for only 27. A real model (gpt-4o) nominated
+> correctly on 33 of a 40-case sample and was confirmed on 20 of 20 where
+> evidence existed, with zero false confirms. The remaining 480 have nothing to
+> verify against — the two halves are structurally identical — and the system
+> abstains, naming the check that failed.**
+
+Both halves of that sentence matter and neither survives alone. The first is a
+bound on the *data*: no model can be confirmed on a pair whose two rows are
+indistinguishable, so 27 is a ceiling rather than a score. The second is what a
+real model did inside that bound — and the fact that it was **rejected on the
+other 20 of the sample, exactly as a perfect nominator is**, is the property the
+architecture is for.
+
 Measured across all **507 pre-registered decisions** (seeds 1000–1019) with
 three stand-in clients and **no model calls at all**. Full table in
 [`reports/ai/ai_loop.json`](reports/ai/ai_loop.json).

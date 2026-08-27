@@ -58,6 +58,11 @@ DECLARED_TREE = frozenset(
         "config",
         "data",
         "eval",
+        # Declared in SDD section 2 from the start; it only became TRACKED at
+        # M7, when the first fixtures were recorded into it. An empty
+        # directory is invisible to git, so this guard could not fire until
+        # there was something in it.
+        "fixtures",
         "gen",
         "pyproject.toml",
         "reports",
