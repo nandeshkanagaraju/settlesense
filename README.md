@@ -475,6 +475,19 @@ failure, reported unadjusted.** Nothing was changed in response to it — see
 
 ## Reproducing
 
+**Setup.** Python 3.11 or newer. Nothing here needs `OPENAI_API_KEY` — tests,
+eval, bench and the UI all replay from `fixtures/llm/`, and `make
+record-fixtures` is the only target that would spend anything.
+
+```
+python -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev]'
+```
+
+The `[dev]` extra is not optional in practice: it carries ruff, mypy and
+lxml-stubs, and `make check` runs all three. Every `make` target prefers
+`.venv/bin/python` when it exists, so activating is enough.
+
 ```
 make gen           # dev dataset,      seed 42
 make gen-holdout   # held-out dataset, seed 999, includes withheld noise types
@@ -484,11 +497,28 @@ make eval-set      # regenerate the AI evaluation set (seeds 1000-1019)
 make bench         # throughput scaling table -> reports/bench.md
 make test          # no network, deterministic, under 120 seconds
 make check         # ruff + mypy + determinism guard tests
-make screenshots   # regenerate the committed PNGs (needs Chrome)
+
+make demo-state    # build the state DB the queue reads (writes)
+make ai-store      # replay the AI layer over the persisted store (no spend)
+make ui-static     # the evidence queue as one HTML file
+make ui-outage     # the same queue with a simulated model outage (M10)
+make export        # CONFIRMED -> Tally-compatible XML, dry run (M9)
+make screenshots   # regenerate four of the six committed PNGs (needs Chrome)
 ```
 
 Targets that have no implementation yet refuse and exit non-zero. They never
 pass silently.
+
+**A dirty tree after `make bench` or `make eval` is expected, and only for two
+files.** `reports/bench.md` and `reports/eval/throughput.md` are committed —
+the README quotes their throughput figures, and a quoted number with no
+artifact behind it is unfalsifiable — but they record *durations*, which differ
+on every run and every machine. So they are evidence of a real run on a stated
+machine rather than byte-stable artifacts, and `git status` will show them
+modified. Everything else regenerates byte-identically: `data/dev`,
+`data/holdout`, `reports/eval/results.json`, `reports/ui/queue.html`,
+`reports/ui/queue-outage.html`, `reports/ai/store_path.json` and the export XML
+all come back unchanged, and a diff in any of those is a real finding.
 
 ### The screenshots, and which two are manual
 

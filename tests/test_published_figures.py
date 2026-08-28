@@ -53,6 +53,10 @@ ARTIFACT_GLOBS = (
     "*MANIFEST.json",
     "tests/collection_baseline.json",
     "data/*/truth_*.json",
+    # DECLARATIONS COUNT. `requires-python = ">=3.11"` is a committed fact a
+    # reader can check, and the README's setup step cites it; without this the
+    # check rejected a version number as an untraceable measurement.
+    "pyproject.toml",
 )
 """What counts as somewhere a published figure may have come from.
 
@@ -165,7 +169,7 @@ def _artifact_texts() -> tuple[tuple[str, str], ...]:
     for name in sorted(listed):
         if not any(fnmatch.fnmatch(name, glob) for glob in ARTIFACT_GLOBS):
             continue
-        if not name.endswith((".json", ".md", ".yaml", ".yml", ".html", ".xml")):
+        if not name.endswith((".json", ".md", ".yaml", ".yml", ".html", ".xml", ".toml")):
             continue
         path = REPO / name
         if path.is_file():
