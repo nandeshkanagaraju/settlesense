@@ -313,8 +313,12 @@ dates is a config change requiring no code change.
 Path B — the scoring path used when no UTR fragment survives in the narration
 — accepted **6 of 8** candidates on seed 42 with **zero false accepts**.
 
-That result is conditioned on **low batch density**: 39 batches across 3
-merchants over ~90 days, where amount-plus-date is close to unique. It should
+That result is conditioned on **low batch density**: 39 batches across three
+merchant profiles, whose settled dates span **20 days** (2026-09-01 to
+2026-09-21) inside a 91-day configured window, where amount-plus-date is close
+to unique. This sentence previously said "3 merchants over ~90 days" — the 90
+was the configured window rather than the batches, and the correction makes the
+density HIGHER than stated, which cuts against the engine. It should
 not be read as a general precision figure for amount-and-date matching.
 
 A production merchant settling daily with recurring price points would
@@ -346,3 +350,110 @@ production loss. Real deployment would require risk, compliance and
 business-owner sign-off on every one of them.
 
 ## What this does not establish
+
+Every figure below is read from a committed artifact, and
+`tests/test_limitations.py` asserts each one against its source. A limitations
+section that drifted from the measurements would be the most misleading page in
+the repository.
+
+**Synthetic data only.** One generator, three merchant *profiles*
+(`profile_a/b/c` in `config/mdr_rates.yaml`), **5,026 reconciliation cases**
+from **15,779 input rows** on the dev seed. No production merchant data was
+used at any point, and no production performance is claimed. Everything here is
+a measurement of an engine against a generator, and the generator was written
+by the same hand as the engine — the separation is structural (`gen/` and
+`settlesense/` share no utility, and a test enforces it), not organisational.
+
+**Batch density is low, and lower than this file previously said.** The fuzzy
+UTR section above described *"39 batches across 3 merchants over ~90 days"*.
+The 90 comes from the configured simulation window (2026-09-01 … 2026-11-30);
+the **batches themselves span 20 days**, 2026-09-01 to 2026-09-21. That is
+denser than stated and the correction cuts *against* the engine: amount-plus-date
+is unique here across a shorter window than the sentence implied. Path B — the
+path used when no UTR fragment survives — accepted **6 of 8** candidates with
+**zero false links**, one ambiguous and one abstained. A merchant settling daily
+with recurring price points would collide often, and Path B's entire
+discriminating power is those two fields. The abstention rule is the safeguard,
+it fires correctly on a constructed collision, and it has **never fired on
+generated data** — across seed 42 and seeds 1000–1019, 780 batches, no two share
+an amount at all.
+
+**The held-out run breached both pre-declared thresholds.** Residual
+false-match rate **0.010456** against `config/thresholds.yaml`'s **0.01**, and
+gross exposure **₹897,396.86** against **₹500.00**. All 52 failures are
+`split_settlement`, one of the two noise types withheld from engine
+development. That is **one blind category, not a collapse**: on the same unseen
+data Population B improved (batch link rate 0.948718 → 0.974359; noise recovery
+0.882353 → 0.950000 on the counting basis) and Population C was perfect on both
+sets (precision and recall 1.000000; 29/29 dev, 26/26 holdout). The dev set's `0.000000` false-match rate
+should be read as *zero on noise the engine was built against* — it carries no
+generalisation claim, and the holdout is the only figure here that does.
+
+**The AI surface is one category.** Everything measured about the model concerns
+`DUPLICATE_CANDIDATE`. It says where a model helped in *this* workflow on *this*
+data. It does not generalise to reconciliation broadly, and — the direction
+that is easier to forget — it does not establish that a model could not help
+elsewhere in the pipeline. No other stage was tried, so no other stage was ruled
+out.
+
+**n is small, and smaller on the store path.** 507 dataset-derived decisions
+across 20 seeds (27 oracle-confirmable, 0 oracle false confirms), 40 recorded
+real-model decisions, and **22 store-path pairs of which 1 confirmed**. One of
+22 is not a rate. The error bars on it are wide enough that it should be read as
+*the wiring works and produced a correct confirmation*, not as a success
+percentage — which is why it is published beside M7's number rather than merged
+into it.
+
+**The duplicate task carries a generator artifact.** Every injected duplicate
+has an `-R###` suffix on its invoice number: **26 of 5,053 ledger rows**, and
+those 26 are exactly the 26 truth marks. One regex resolves the entire
+AI-eligible residual. It is deliberately unused and the verifier is blind to
+invoice numbers — but it cuts both ways, and the second way is rarely said. The
+task as posed is **easier to cheat** than a real one, *and possibly harder to
+solve honestly*: excluding the fingerprint, the halves of a pair share customer,
+gross, order date, SKU and payment count, settlement-chain length differs in 2
+of 26, and order-id ordering is a coin flip. A real duplicate would usually
+leave more trace than this one does.
+
+**A truth defect was found and deliberately not corrected.** `BAT_16A0609791AB`
+is labelled `ROUNDING_DIFFERENCE` in `truth_42.json` with a declared
+`true_variance_amount` of **-0.08**, while the batch total and its bank credit
+are **both ₹344,959.64** — an observable difference of exactly **₹0.00**. There
+is nothing in the data to detect and an engine reporting "clean" is right. The
+generator was frozen before the engine existed and was correctly **not
+re-frozen** for this, so Population B noise recovery is reported **both ways**:
+**0.882353** counting the batch as a miss and **0.875000** excluding it. The two
+diverge on the dev set, which is where the defect lives, and coincide at
+**0.950000** on the holdout, where `defect_batches_excluded` is empty because
+the batch is not in that dataset. Printing both turns a hidden asterisk into
+evidence the ground truth was audited, and lets a reader pick the number they
+believe.
+
+**The Tally export has never been imported by an accounting system.** It is
+schema-validated against a bundled XSD written here, which catches this
+project's own malformed documents and says nothing about whether Tally accepts
+them. Labelled on the face of every batch: *schema-validated Tally-compatible
+XML; not tested against a live Tally instance.* No live instance was available
+and none was used.
+
+**Cost comes from 66 recorded decisions, not a sustained run.** 40 in
+`fixtures/llm_manifest.json` (₹19.37) and 26 in `fixtures/llm_manifest_dev.json`
+(₹12.61), both against `gpt-4o-2024-08-06`. Two recordings agreeing to 0.2% per
+decision is a measurement; it is not a load test, a month of traffic, or a
+figure that survives a model or price change. **Live latency was never
+captured** — the recorder read the API's token counts and no clock — so every
+timing figure in this repository is **replay** off the local cache, labelled as
+replay wherever it appears. There is no per-decision API latency number here
+and none can be recovered from the fixtures.
+
+**Throughput is one machine.** `arm · 8 cores · 8 GiB · Python 3.14.7 ·
+macOS-26.6-arm64-arm-64bit-Mach-O`, stated in `reports/bench.md`'s header and
+quoted into the README verbatim rather than retyped. Median of three, never the
+best run. Nothing here establishes behaviour on a different CPU, a different
+Python, or under contention. The same caveat applies to the suite itself: it
+runs at **103.2s against SDD 7's 120s budget** on that machine, and a slower one
+may breach it — the budget is a wall-clock assertion, so it is a property of the
+machine as much as of the code.
+
+**Cross-platform reproducibility was never run.** The determinism claims are
+verified by re-running on one machine, not by two machines agreeing.

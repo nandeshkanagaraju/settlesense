@@ -144,9 +144,12 @@ break. That guard exists because this divergence shipped twice: once on
 evidence resolution for 333 of 339 rows, and once when the static page was
 still calling the verifier itself while the README said it wasn't.
 
-Each view states its own scope in the same words — the page shows the 40
-largest, the app scrolls all 339 — because a table that does not say whether it
-is filtered is the wrong kind of ambiguity in an honest exception list.
+Each view states its own scope in the same words, and the sentence is COMPUTED
+from the realised counts rather than written — both now render all 339, so both
+say so. It said "the page shows the 40 largest" until the AI layer resolved two
+rows ranking 58th and 59th; had the sentence been prose it would still say 40.
+A table that does not say whether it is filtered is the wrong kind of ambiguity
+in an honest exception list.
 
 ### Throughput — dev seed (`make bench`)
 
@@ -784,4 +787,9 @@ rows would be reading the future.
 
 ## Limitations
 
-See [LIMITATIONS.md](LIMITATIONS.md).
+See [LIMITATIONS.md](LIMITATIONS.md) — the held-out set's two threshold
+breaches and why nothing was tuned in response, the ₹25 recording that was not
+bought and the measurement that stopped it, a truth defect found and
+deliberately not corrected, and a closing section on what this project does not
+establish: synthetic data, one AI category, small n, one machine, and an export
+no accounting system has ever imported.
