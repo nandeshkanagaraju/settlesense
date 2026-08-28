@@ -36,7 +36,7 @@ import pytest
 
 from eval.run_ai import OracleClient, truth_duplicate_orders
 from eval.run_store_ai import M7_LINE, pair_index, score
-from settlesense.ai.client import ReplayLLMClient
+from settlesense.ai.client import OutageLLMClient, ReplayLLMClient
 from settlesense.ai.loop import resolve_exception
 from settlesense.ai.pairing import (
     DUPLICATE_CANDIDATE,
@@ -559,4 +559,64 @@ def test_the_confidence_caption_matches_what_the_column_can_hold(
     print(
         f"\n  {len(ai_rows)} AI rows render "
         f"{sorted({row.confidence_or_placeholder for row in ai_rows})}, never 0.00"
+    )
+
+
+# ===========================================================================
+# The recovery fix, on the path where it was LATENT rather than observed
+# ===========================================================================
+
+
+@pytest.mark.charter_guard
+def test_the_store_path_also_clears_pending_rows_it_examines(
+    config: AppConfig, dataset: Any, fresh_store: Any
+) -> None:
+    """`run_store_ai_stage` carries the same fix as `run_ai_stage`, ASSERTED.
+
+    b64f388 fixed both stages and tested one. The pairing stage was called
+    "latent, not observed" - which is exactly the state the orchestrator's copy
+    was in for the whole of M10, and exactly why it survived. A fix nobody has
+    run is a fix nobody has checked.
+
+    So the store is put into the condition the bug needs: rows already marked
+    PENDING_AI_UNAVAILABLE by an outage, THEN examined by a healthy client. The
+    normal-case OPEN rows this path usually sees cannot detect it.
+    """
+    store = fresh_store()
+    index = pair_index(dataset)
+
+    # Put the pairs into PENDING_AI_UNAVAILABLE first - the precondition the
+    # bug needs, and asserted to have fired rather than assumed.
+    outage = run_store_ai_stage(store, dataset, config, OutageLLMClient(), DAY, index)
+    assert outage.unavailable, "no pair went pending; the precondition did not fire"
+    pending_ids = set(outage.unavailable)
+    in_store = {
+        row.exception_id
+        for row in store.get_queue(ALL_STATUSES)
+        if row.status is ExceptionStatus.PENDING_AI_UNAVAILABLE
+    }
+    assert in_store == pending_ids, (len(in_store), len(pending_ids))
+
+    recovery = run_store_ai_stage(store, dataset, config, ReplayLLMClient(), DAY, index)
+    assert not recovery.unavailable, "the healthy client still reported an outage"
+
+    still_pending = {
+        row.exception_id
+        for row in store.get_queue(ALL_STATUSES)
+        if row.status is ExceptionStatus.PENDING_AI_UNAVAILABLE
+    }
+    assert still_pending == set(), (
+        f"{len(still_pending)} rows still say the model is unavailable after the "
+        "store path examined them; the pairing stage does NOT carry the fix"
+    )
+
+    # THE ROUTE, not just the destination.
+    sample = sorted(pending_ids)[0]
+    row = store.get_exception(sample)
+    assert row is not None
+    hops = [str(entry.to_status) for entry in row.audit]
+    assert hops[hops.index("PENDING_AI_UNAVAILABLE") + 1] == "OPEN", hops
+    print(
+        f"\n  {len(pending_ids)} pairs pending after an outage -> "
+        f"{len(still_pending)} after recovery, each via OPEN"
     )

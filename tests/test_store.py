@@ -173,8 +173,20 @@ def test_illegal_transitions_rejected(store: ExceptionStore) -> None:
         ("ABSTAINED", "CLOSED"),
         ("PENDING_EVIDENCE", "CLOSED"),
         ("PENDING_AI_UNAVAILABLE", "CLOSED"),
+        # NAMED EXPLICITLY AFTER b64f388, which made the recovery path USE the
+        # PENDING_AI_UNAVAILABLE -> OPEN edge for the first time. The edge was
+        # already legal and this table did not change - but a state whose only
+        # exit suddenly carries traffic is a state whose other exits deserve to
+        # be named rather than left to the 36-pair sweep to cover in aggregate.
+        # A future "let it go straight to ABSTAINED, it already abstained"
+        # would be a plausible-sounding shortcut past the lifecycle.
+        ("PENDING_AI_UNAVAILABLE", "ABSTAINED"),
+        ("PENDING_AI_UNAVAILABLE", "CONFIRMED"),
     ):
         assert pair in illegal, f"{pair} must be illegal (SDD 3)"
+    assert ("PENDING_AI_UNAVAILABLE", "OPEN") in legal, (
+        "the recovery path depends on this edge; b64f388 routes examined rows back through it"
+    )
     assert ("CONFIRMED", "CLOSED") in legal, "CLOSED must have exactly one predecessor"
     closed_predecessors = [src for src, tgt in legal if tgt == "CLOSED"]
     assert closed_predecessors == ["CONFIRMED"], closed_predecessors

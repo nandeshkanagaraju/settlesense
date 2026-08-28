@@ -814,3 +814,136 @@ def test_14b_a_healthy_second_run_actually_clears_the_pending_rows(
         f"\n  {len(pending_ids)} pending -> re-sent, {len(recovery.abstained)} abstained, "
         f"{len(still_pending)} still pending in the store; no id in two buckets"
     )
+
+
+@pytest.mark.charter_guard
+def test_the_result_and_the_store_agree_after_every_stage_shape(
+    config: AppConfig, fresh_store: Any
+) -> None:
+    """THE SEAM NOTHING WAS CHECKING, across all four shapes a run can take.
+
+    The recovery bug was not a wrong count or an illegal transition. Both sides
+    were internally consistent - disjoint buckets summing correctly on one, all
+    legal transitions on the other - and nothing compared them to each other. A
+    reader trusting the result saw a recovered system; a reader opening the
+    queue saw an outage.
+
+    So the invariant is asserted for every shape, not only the one that broke:
+    total outage, partial outage, healthy, and recovery-after-outage. A helper
+    that only ever ran on the fixed path would be evidence about the fix rather
+    than about the invariant.
+    """
+    from tests.stage_invariant import assert_result_matches_store
+
+    lines = []
+
+    def check(store: ExceptionStore, handled: list[Any], result: Any, label: str) -> None:
+        summary = assert_result_matches_store(
+            store,
+            handled=[row.exception_id for row in handled],
+            confirmed=result.confirmed,
+            abstained=result.abstained,
+            pending=result.pending_unavailable,
+        )
+        lines.append(f"{label:<24} {summary}")
+
+    # 1. Total outage.
+    store = fresh_store()
+    dataset = store.cumulative_dataset(OUTAGE_DAY, DATA, config)
+    handled = list(store.get_queue(RESIDUAL_STATES))
+    check(
+        store,
+        handled,
+        run_ai_stage(store, dataset, config, OutageLLMClient(), OUTAGE_DAY),
+        "total outage",
+    )
+
+    # 2. Recovery on the SAME store - the shape that was broken.
+    handled = list(store.get_queue(RESIDUAL_STATES))
+    recovery = run_ai_stage(store, dataset, config, ReplayLLMClient(), OUTAGE_DAY)
+    check(store, handled, recovery, "recovery after outage")
+    assert not recovery.pending_unavailable, "the healthy run still reported pending rows"
+
+    # 3. Partial outage at a stated size.
+    partial_store = fresh_store()
+    ten = list(partial_store.get_queue(RESIDUAL_STATES))[:10]
+    check(
+        partial_store,
+        ten,
+        run_ai_stage(partial_store, dataset, config, FlakyClient(3), OUTAGE_DAY, rows=ten),
+        "partial outage (3 of 10)",
+    )
+
+    # 4. Healthy from the start, with nothing ever pending.
+    healthy_store = fresh_store()
+    handled = list(healthy_store.get_queue(RESIDUAL_STATES))
+    check(
+        healthy_store,
+        handled,
+        run_ai_stage(healthy_store, dataset, config, ReplayLLMClient(), OUTAGE_DAY),
+        "healthy",
+    )
+
+    print("\n  " + "\n  ".join(lines))
+
+
+@pytest.mark.charter_guard
+def test_the_agreement_check_fires_when_the_store_is_left_behind() -> None:
+    """POSITIVE CONTROL. It must catch the exact bug it was written for.
+
+    Constructed rather than reproduced: the defect is fixed, so the only way to
+    prove the guard would have caught it is to hand it the disagreement
+    directly. A helper that could not fail here would be decoration on four
+    passing tests.
+    """
+    from tests.stage_invariant import assert_result_matches_store
+
+    class FakeRow:
+        def __init__(self, exception_id: str, status: ExceptionStatus) -> None:
+            self.exception_id = exception_id
+            self.status = status
+
+    class FakeStore:
+        def __init__(self, rows: list[FakeRow]) -> None:
+            self._rows = rows
+
+        def get_queue(self, *_args: Any, **_kwargs: Any) -> list[FakeRow]:
+            return self._rows
+
+    # THE BUG, EXACTLY: examined and abstained, store still says unavailable.
+    left_behind = FakeStore([FakeRow("a", ExceptionStatus.PENDING_AI_UNAVAILABLE)])
+    with pytest.raises(AssertionError, match="still says PENDING_AI_UNAVAILABLE"):
+        assert_result_matches_store(
+            left_behind,  # type: ignore[arg-type]
+            handled=["a"],
+            confirmed=[],
+            abstained=["a"],
+            pending=[],
+        )
+
+    # And the aggregate direction: a pending row the result never mentioned.
+    forgotten = FakeStore(
+        [
+            FakeRow("a", ExceptionStatus.CONFIRMED),
+            FakeRow("b", ExceptionStatus.PENDING_AI_UNAVAILABLE),
+        ]
+    )
+    with pytest.raises(AssertionError, match="handled rows pending"):
+        assert_result_matches_store(
+            forgotten,  # type: ignore[arg-type]
+            handled=["a", "b"],
+            confirmed=["a"],
+            abstained=[],
+            pending=[],
+        )
+
+    # And it PASSES when they agree, or it would just fail on everything.
+    agreed = FakeStore([FakeRow("a", ExceptionStatus.PENDING_AI_UNAVAILABLE)])
+    assert "store agrees" in assert_result_matches_store(
+        agreed,  # type: ignore[arg-type]
+        handled=["a"],
+        confirmed=[],
+        abstained=[],
+        pending=["a"],
+    )
+    print("\n  the guard catches an abandoned row, a forgotten one, and passes when they agree")
