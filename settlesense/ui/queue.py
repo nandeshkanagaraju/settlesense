@@ -286,7 +286,7 @@ def build_rows(
             amount=exception.amount,
             status=exception.status,
             confidence=exception.confidence,
-            resolved_as=(resolved or {}).get(store._subject_id(exception.exception_id) or ""),
+            resolved_as=(resolved or {}).get(store.subject_id(exception.exception_id) or ""),
             verified_by=verified_by(exception),
             day_opened=exception.first_seen_day,
             day_confirmed=exception.confirmed_day,
@@ -466,7 +466,7 @@ def evidence_index(
     index: dict[str, tuple[str, ...]] = {}
     for population in Population:
         for exception in store.get_queue(ALL_STATUSES, population=population):
-            subject = store._subject_id(exception.exception_id) or ""
+            subject = store.subject_id(exception.exception_id) or ""
             if exception.category == duplicate:
                 order_id = order_of_case.get(subject, "")
                 index[exception.exception_id] = pair_of_order.get(

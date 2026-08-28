@@ -883,7 +883,7 @@ class ExceptionStore:
         newly_confirmed: list[Exception_] = []
 
         for exception in residual:
-            subject = self._subject_id(exception.exception_id)
+            subject = self.subject_id(exception.exception_id)
             if subject is None or subject not in resolved_now:
                 continue
             evidence = resolved_now[subject]
@@ -900,7 +900,21 @@ class ExceptionStore:
 
         return sorted(newly_confirmed, key=lambda exc: (-exc.amount, exc.exception_id))
 
-    def _subject_id(self, exception_id: str) -> str | None:
+    def subject_id(self, exception_id: str) -> str | None:
+        """The case, batch or row this exception is ABOUT. None if unknown.
+
+        PUBLIC BECAUSE TWO CALLERS OUTSIDE THIS MODULE NEED IT, and both were
+        reaching for the underscore-prefixed version. The queue joins the
+        store's detected category to the engine's current one, and the M9
+        exporter picks a ledger from the same join - neither can be written
+        without it, so it is part of the interface whether or not it was
+        declared as one.
+
+        READ-ONLY, and it is the only projection of a row this class exposes
+        beyond `Exception_`. `subject_id` is not on `Exception_` itself because
+        an exception is identified by its own id everywhere else; carrying the
+        subject would invite code that matched on it.
+        """
         row = self._connection.execute(
             "SELECT subject_id FROM exceptions WHERE exception_id = ?", (exception_id,)
         ).fetchone()

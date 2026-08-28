@@ -425,6 +425,70 @@ Two noise types — `garbled_narration` and `split_settlement` — are **withhel
 from engine tuning, gated behind `--include-withheld`, and reported separately
 as the unknown-unknowns result.
 
+## The journal export (`make export`)
+
+**Schema-validated Tally-compatible XML; not tested against a live Tally
+instance.** The XSD is written here and bundled here, so a malformed document
+fails at `to_xml` rather than at somebody's import prompt — but validating
+against a schema you wrote yourself catches your own defects and says nothing
+about whether Tally accepts the result. That would need a live instance and
+there has not been one. It is not described anywhere as an integration, and a
+guard bans the word from the export path.
+
+Everything is a dry run. Nothing transmits, and `socket.socket` is
+booby-trapped in the test that exports a real batch.
+
+### 283 confirmed exceptions produce 16 vouchers
+
+| | Count |
+|---|---:|
+| CONFIRMED in the dev store | 283 |
+| → **vouchers written** | **16** |
+| → cleared, no entry to make | 267 |
+| Debits | ₹2,781,220.13 |
+| Credits | ₹2,781,220.13 |
+
+The gap is the point, and the document states it in the header rather than
+leaving a reader to wonder where 267 entries went. An exception stores the
+category recorded **at detection**; 274 of these were opened as `UNEXPLAINED`
+on day 1 or 12 and explained by a later day's files. For most of them the
+variance did not turn out to be a variance at all — it **cleared** once the
+rest of the data arrived, and a discrepancy that no longer exists has no
+journal entry. Posting on the detected category would have written 274
+vouchers for something nobody ever claimed was wrong.
+
+### Every batch states what its numbers rest on
+
+```xml
+<SETTLESENSE.PROVENANCE dataset="dev" seed="42" configHash="12e9a009b59251d8"
+    residualFalseMatchRate="0.000000" batchDate="2026-11-30"
+    idempotencyKey="c6ded63298100e2c…" voucherCount="16" clearedCount="267"
+    basis="schema-validated Tally-compatible XML; not tested against a live Tally instance"/>
+```
+
+**Because the exporter cannot detect its own worst input.** It runs on
+CONFIRMED exceptions, and CONFIRMED means *an explanation passed
+verification*, not *the explanation is right*. The held-out run confirmed 52
+split settlements under a plausible wrong category, and every one is locally
+consistent with the evidence attached to it — there is nothing inside the
+exporter to distinguish them by. So the answer is disclosure rather than a
+check: the measured residual false-match rate for the dataset goes on the face
+of the document. On the dev set that is `0.000000`; a batch built from the
+held-out store would read `0.010456`.
+
+The rate is a **required argument with no default**. It is truth-derived, so
+`settlesense/` never computes it — `eval/run_export.py` reads it out of
+`reports/eval/results.json` and injects it, the same way `as_of` is injected
+rather than read from a clock. A batch whose rate is unknown does not export;
+it raises.
+
+**Every header field is inside the idempotency key.** SDD 4.7 hashed the
+exception set and the batch date alone, so two batches over the identical
+confirmed set under different configs would have written the same filename with
+different content. Varying `config_hash`, `seed`, `dataset` or the rate — with
+the confirmed set held constant — now produces a different key and a different
+filename, and a test asserts each one separately.
+
 ## Modules built
 
 Recorded here at submission: which Level 2 modules were built and which were

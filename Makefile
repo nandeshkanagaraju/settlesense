@@ -26,7 +26,7 @@ define notimpl
 	@exit 1
 endef
 
-.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop record-fixtures demo-state ui ui-static check golden-accept bench config-check fault-report collection-baseline eval-holdout
+.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop record-fixtures demo-state ui ui-static export check golden-accept bench config-check fault-report collection-baseline eval-holdout
 
 help:
 	@echo "SettleSense targets:"
@@ -47,6 +47,7 @@ help:
 	@echo "  demo-state    build the state DB the queue reads (writes)"
 	@echo "  ui            evidence queue, Streamlit (read-only)"
 	@echo "  ui-static     evidence queue as one HTML file (read-only)"
+	@echo "  export        CONFIRMED -> Tally-compatible XML, dry run (M9)"
 	@echo "  golden-accept regenerate golden files (deliberately awkward)"
 
 # --- data generation --------------------------------------------------------
@@ -212,6 +213,19 @@ ui: demo-state
 # easier to capture than a server that has to be running.
 ui-static: demo-state
 	$(PYTHON) -m settlesense.ui.build_static --db reports/ui/state.db --out reports/ui/queue.html
+
+# --- export -----------------------------------------------------------------
+
+# Schema-validated Tally-compatible XML; not tested against a live Tally
+# instance. A DRY RUN - it writes a file and never transmits.
+#
+# --close is NOT passed here. CONFIRMED -> CLOSED is terminal and there is no
+# path back, so making `make export` do it would mean a demo run silently
+# spending state a later run needs. The flag exists; using it is a decision
+# somebody types.
+export: demo-state
+	$(PYTHON) -m eval.run_export --db reports/ui/state.db --results reports/eval/results.json \
+	  --dataset dev --out reports/export
 
 # --- goldens ----------------------------------------------------------------
 

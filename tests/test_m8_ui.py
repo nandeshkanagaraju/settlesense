@@ -763,7 +763,7 @@ def test_18_verified_by_is_populated_and_agrees_with_the_engine(
     disagreements = [
         row.exception_id
         for row in confirmed
-        if (store._subject_id(row.exception_id) or "") in engine_open
+        if (store.subject_id(row.exception_id) or "") in engine_open
     ]
     assert not disagreements, (
         f"{len(disagreements)} rows are marked resolved by the store but are still "

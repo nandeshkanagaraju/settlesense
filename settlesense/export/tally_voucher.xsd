@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Tally journal-voucher import envelope, narrowed to what this exporter emits.
+
+  WHAT THIS SCHEMA IS. A description of the documents settlesense produces,
+  written so that a malformed one fails here rather than at an import prompt.
+  It is NOT the Tally DTD and does not claim to be: Tally's own import format
+  is broader, versioned with the product, and accepts many elements this
+  exporter never writes. Validating against a narrow schema you control catches
+  your own defects; it says nothing about whether a third-party product accepts
+  the result. That claim would need a live instance, and there has not been one.
+
+  SETTLESENSE.PROVENANCE IS NOT A TALLY ELEMENT. It is ours, and it is
+  mandatory. It records the dataset, seed, config hash and measured residual
+  false-match rate the batch was produced under, because the exporter cannot
+  detect its own worst input - a confirmation under a plausible wrong category
+  is locally consistent with its evidence - and an accountant importing this
+  must be able to see what the numbers rest on.
+
+  AMOUNT SIGN. Tally's convention: a debit is negative and carries
+  ISDEEMEDPOSITIVE=Yes, a credit is positive. Every voucher's AMOUNTs sum to
+  zero, which is what makes the batch-level balance check meaningful rather
+  than a restatement of how the objects were constructed.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified">
+
+  <!-- Money as a STRING PATTERN, not xs:decimal. xs:decimal accepts "1.5",
+       "1.500" and "0000001.50" as the same value, and would accept a figure
+       written to three places. An accounting document has exactly two, always
+       present, never in scientific notation - so the shape is the constraint. -->
+  <xs:simpleType name="Money">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="-?[0-9]{1,15}\.[0-9]{2}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="TallyDate">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[0-9]{8}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="IsoDate">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="20[0-9]{2}-[0-9]{2}-[0-9]{2}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Six decimal places, matching the eval harness's own rendering of the
+       rate. A rate written to two places would report 1.0456% as 1.05% in a
+       document whose whole purpose is to be precise about it. -->
+  <xs:simpleType name="Rate">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[01]\.[0-9]{6}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="Sha256Hex">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[0-9a-f]{64}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="NonEmpty">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="YesNo">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="Yes"/>
+      <xs:enumeration value="No"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:element name="ENVELOPE">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="HEADER"/>
+        <xs:element ref="BODY"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="HEADER">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="TALLYREQUEST" type="NonEmpty"/>
+        <xs:element ref="SETTLESENSE.PROVENANCE"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- Every attribute is REQUIRED. A provenance block with an optional rate
+       would let a batch export with the field blank, which is the failure the
+       block exists to prevent, restated one layer down. -->
+  <xs:element name="SETTLESENSE.PROVENANCE">
+    <xs:complexType>
+      <xs:attribute name="dataset" type="NonEmpty" use="required"/>
+      <xs:attribute name="seed" type="xs:nonNegativeInteger" use="required"/>
+      <xs:attribute name="configHash" type="NonEmpty" use="required"/>
+      <xs:attribute name="residualFalseMatchRate" type="Rate" use="required"/>
+      <xs:attribute name="batchDate" type="IsoDate" use="required"/>
+      <xs:attribute name="idempotencyKey" type="Sha256Hex" use="required"/>
+      <xs:attribute name="voucherCount" type="xs:positiveInteger" use="required"/>
+      <!-- CONFIRMED exceptions that produced NO voucher because the variance
+           cleared. Required, and required even when zero: a batch of 16
+           vouchers built from 283 confirmed exceptions raises the question of
+           where the other 267 went, and the document has to answer it. -->
+      <xs:attribute name="clearedCount" type="xs:nonNegativeInteger" use="required"/>
+      <xs:attribute name="basis" type="NonEmpty" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="BODY">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="IMPORTDATA">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="REQUESTDESC">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="REPORTNAME" type="NonEmpty"/>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="REQUESTDATA">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="TALLYMESSAGE" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:sequence>
+                          <xs:element ref="VOUCHER"/>
+                        </xs:sequence>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- Exactly TWO ledger entries per voucher. This exporter emits one debit
+       and one credit for one explained variance; a voucher with three legs
+       would mean a compound entry nothing here knows how to build, and
+       accepting one silently is how a wrong document validates. -->
+  <xs:element name="VOUCHER">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="DATE" type="TallyDate"/>
+        <xs:element name="VOUCHERNUMBER" type="NonEmpty"/>
+        <xs:element name="NARRATION" type="NonEmpty"/>
+        <xs:element name="SETTLESENSE.EXCEPTIONID" type="NonEmpty"/>
+        <xs:element name="SETTLESENSE.CATEGORY" type="NonEmpty"/>
+        <xs:element name="ALLLEDGERENTRIES.LIST" minOccurs="2" maxOccurs="2">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="LEDGERNAME" type="NonEmpty"/>
+              <xs:element name="ISDEEMEDPOSITIVE" type="YesNo"/>
+              <xs:element name="AMOUNT" type="Money"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="VCHTYPE" type="NonEmpty" use="required"/>
+      <xs:attribute name="ACTION" type="NonEmpty" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

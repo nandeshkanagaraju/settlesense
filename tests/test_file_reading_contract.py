@@ -52,6 +52,8 @@ REGISTERED_READERS = frozenset(
         "eval/record_fixtures.py",
         "settlesense/exceptions/store.py",
         "settlesense/ai/client.py",
+        "settlesense/export/tally.py",
+        "eval/run_export.py",
     }
 )
 """Every module allowed to read a file, each with a contract test below.
@@ -391,6 +393,85 @@ def _record_empty(tmp: Path) -> str:
     return str(caught.value)
 
 
+# --- M9: the bundled XSD, and the eval artifact the header is read from ------
+
+
+def _schema_missing(tmp: Path) -> str:
+    """No schema on disk. A broken install; nothing may be written."""
+    import settlesense.export.tally as tally
+
+    # monkeypatch rather than assign-and-restore: SCHEMA_PATH is Final, and the
+    # try/finally version typechecks only because mypy cannot see the restore.
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(tally, "SCHEMA_PATH", tmp / "absent.xsd")
+        with pytest.raises(tally.ExportError) as caught:
+            tally.validate("<ENVELOPE/>")
+    assert "missing" in str(caught.value)
+    return "schema missing: cannot validate, refuse to write"
+
+
+def _schema_empty(tmp: Path) -> str:
+    """A schema file that EXISTS and is blank. Strictly worse than missing.
+
+    lxml parses an empty document as an error rather than as a permissive
+    schema, but the reason this case is registered separately is that the
+    NEXT-worst version - a well-formed schema declaring no elements - would
+    accept every document silently. Both are refused, and the refusals say
+    different things, because "your install is broken" and "your schema checks
+    nothing" send a reader to different places.
+    """
+    import settlesense.export.tally as tally
+
+    path = tmp / "empty.xsd"
+    path.write_text("", encoding="utf-8")
+    vacuous = tmp / "vacuous.xsd"
+    vacuous.write_text(
+        '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>',
+        encoding="utf-8",
+    )
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(tally, "SCHEMA_PATH", path)
+        with pytest.raises(tally.ExportError) as caught:
+            tally.validate("<ENVELOPE/>")
+        # And the vacuous-but-well-formed case, which is the dangerous one: it
+        # parses, so nothing upstream notices, and it accepts every document.
+        patched.setattr(tally, "SCHEMA_PATH", vacuous)
+        with pytest.raises(tally.ExportError, match="declares no elements"):
+            tally.validate("<ENVELOPE/>")
+    assert "empty" in str(caught.value)
+    return "schema empty: parses as no rules, so validation would mean nothing"
+
+
+def _results_missing(tmp: Path) -> str:
+    """No results.json. There is no measured false-match rate to disclose."""
+    from eval.run_export import provenance_from_results
+    from settlesense.export.tally import ExportError
+
+    with pytest.raises(ExportError) as caught:
+        provenance_from_results(tmp / "absent.json", "dev")
+    assert "does not exist" in str(caught.value)
+    return "results missing: no measured rate exists, refuse"
+
+
+def _results_empty(tmp: Path) -> str:
+    """A results.json that EXISTS and carries no Population A rate.
+
+    An eval artifact predating Population A is legitimate data - it was written
+    by a real run - and it still cannot support a provenance header. The
+    distinction matters because the two send you to different fixes: generate
+    the artifact, versus re-run the eval that produces the metric.
+    """
+    from eval.run_export import POPULATION_A_KEY, provenance_from_results
+    from settlesense.export.tally import ExportError
+
+    path = tmp / "results.json"
+    path.write_text(json.dumps({"seed": 42, "config_hash": "abc"}), encoding="utf-8")
+    with pytest.raises(ExportError) as caught:
+        provenance_from_results(path, "dev")
+    assert POPULATION_A_KEY in str(caught.value)
+    return "results present, rate absent: the metric was never computed"
+
+
 CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "settlesense/ingest.py": (_ingest_missing, lambda _tmp: _ingest_empty()),
     "settlesense/config.py": (_config_missing, _config_empty),
@@ -401,6 +482,8 @@ CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "eval/record_fixtures.py": (_record_missing, _record_empty),
     "settlesense/exceptions/store.py": (_store_missing, _store_empty),
     "settlesense/ai/client.py": (_replay_missing, _replay_empty),
+    "settlesense/export/tally.py": (_schema_missing, _schema_empty),
+    "eval/run_export.py": (_results_missing, _results_empty),
 }
 
 

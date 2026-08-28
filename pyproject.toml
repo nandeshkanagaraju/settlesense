@@ -24,6 +24,10 @@ dependencies = [
 dev = [
     "ruff",
     "mypy",
+    # M9 emits XML through lxml. Without the stubs mypy treats every etree call
+    # as Any, so `to_xml` would typecheck while returning whatever it liked -
+    # the export path is the last place to accept a silent Any.
+    "lxml-stubs",
 ]
 
 [tool.setuptools.packages.find]
