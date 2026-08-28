@@ -48,6 +48,7 @@ from settlesense.config import AppConfig, load_config
 from settlesense.exceptions.store import ALL_STATUSES, RESIDUAL_STATES, ExceptionStore
 from settlesense.types import ExceptionStatus, ResolutionSource
 from settlesense.ui.queue import population_summaries
+from tests.test_m10_degradation import FlakyClient
 
 REPO = Path(__file__).resolve().parent.parent
 DATA = REPO / "data" / "dev"
@@ -620,3 +621,87 @@ def test_the_store_path_also_clears_pending_rows_it_examines(
         f"\n  {len(pending_ids)} pairs pending after an outage -> "
         f"{len(still_pending)} after recovery, each via OPEN"
     )
+
+
+@pytest.mark.charter_guard
+def test_the_result_and_the_store_agree_after_every_store_path_shape(
+    config: AppConfig, dataset: Any, fresh_store: Any
+) -> None:
+    """THE AGREEMENT INVARIANT, on the stage it was never applied to.
+
+    `tests/stage_invariant.py` opened by calling itself "shared by both stages"
+    and was shared by one. Every caller ran `run_ai_stage`; the pairing stage
+    had no crossing assertion at all, which is the same shape as the bug the
+    helper exists for - something written to be general, applied to the path
+    that was already being watched.
+
+    Not a style point, and not argued from reading. Deleting the recovery fix
+    from `settlesense/ai/pairing.py` leaves the four-shape orchestrator test
+    GREEN: nothing it checks goes through this stage. The only guard on the
+    pairing stage's half of the seam was the single recovery test above, which
+    checks one status in one shape.
+
+    `handled` is the ids the stage actually POSED A QUESTION ABOUT - the two
+    rows of every pair it resolved - and not the whole residual set. Rows in
+    `unpaired` are the bucket for "the wiring could not ask", and counting them
+    as handled would demand the store say something about a row nothing
+    examined. Because that denominator is exact, the three buckets must cover
+    it exactly, which is asserted here and is a claim the orchestrator's looser
+    `reported <= handled` cannot make.
+    """
+    from tests.stage_invariant import assert_result_matches_store
+
+    index = pair_index(dataset)
+    lines = []
+
+    def check(store: ExceptionStore, result: Any, label: str) -> None:
+        handled = [i for pair, _ in result.outcomes for i in pair.exception_ids]
+        assert handled, f"{label}: the stage resolved no pair, so nothing is compared"
+        summary = assert_result_matches_store(
+            store,
+            handled=handled,
+            confirmed=result.confirmed,
+            # StorePathResult NAMES IT `unavailable`; AiStageResult names the
+            # same bucket `pending_unavailable`. This mapping is the reason the
+            # helper takes ids rather than a result object, and until this test
+            # existed that stated rationale was never exercised by anything.
+            abstained=result.abstained,
+            pending=result.unavailable,
+        )
+        assert set(handled) == set(result.confirmed) | set(result.abstained) | set(
+            result.unavailable
+        ), f"{label}: a row the stage resolved is in none of the three buckets"
+        lines.append(f"{label:<24} {summary}")
+
+    # 1. Total outage: every pair the stage asked about goes pending.
+    store = fresh_store()
+    outage = run_store_ai_stage(store, dataset, config, OutageLLMClient(), DAY, index)
+    assert outage.unavailable, "no pair went pending; the outage shape did not fire"
+    check(store, outage, "total outage")
+
+    # 2. Recovery on the SAME store - the shape the fix was for, and the one
+    #    that was only ever checked by a single hand-written status comparison.
+    recovery = run_store_ai_stage(store, dataset, config, ReplayLLMClient(), DAY, index)
+    assert not recovery.unavailable, "the healthy client still reported an outage"
+    check(store, recovery, "recovery after outage")
+
+    # 3. Healthy from the start, with nothing ever pending.
+    healthy_store = fresh_store()
+    check(
+        healthy_store,
+        run_store_ai_stage(healthy_store, dataset, config, ReplayLLMClient(), DAY, index),
+        "healthy",
+    )
+
+    # 4. Partial outage: the only shape that produces a MIXED result in one
+    #    call, which is where a mislabelled row hides. The failure count is not
+    #    a stated size here - the pairing stage spends an unfixed number of
+    #    model calls per pair - so the test asserts the shape is genuinely
+    #    mixed rather than encoding a number it has not measured.
+    partial_store = fresh_store()
+    partial = run_store_ai_stage(partial_store, dataset, config, FlakyClient(2), DAY, index)
+    assert partial.unavailable, "no pair went pending; this is not a partial outage"
+    assert partial.abstained or partial.confirmed, "nothing was processed; this is a total outage"
+    check(partial_store, partial, "partial outage")
+
+    print("\n  " + "\n  ".join(lines))

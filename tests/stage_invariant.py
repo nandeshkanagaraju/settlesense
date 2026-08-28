@@ -16,6 +16,16 @@ DELIBERATELY NOT A FIXTURE. It takes ids rather than a result object because
 the two stages name their buckets differently - `AiStageResult.pending_unavailable`
 and `StorePathResult.unavailable` - and a helper that reached for an attribute
 would silently pass on whichever type lacked it.
+
+BOTH STAGES, and that had to be made true rather than asserted. This module said
+"shared by both stages" from the day it was written while every call site ran
+`run_ai_stage`; `run_store_ai_stage` never reached it. The proof it mattered is
+mechanical: deleting the recovery fix from `settlesense/ai/pairing.py` left the
+four-shape agreement test GREEN, because no shape it checked went through the
+pairing stage. A guard written to be general and applied to one path is a guard
+whose generality is a comment. `tests/test_m10_store_path.py` now calls it too,
+which is also the only thing that exercises the ids-not-attributes rationale
+above - until then no caller passed a `StorePathResult`.
 """
 
 from __future__ import annotations
@@ -47,6 +57,17 @@ def assert_result_matches_store(
     handled_ids = set(handled)
     confirmed_ids, abstained_ids, pending_ids = set(confirmed), set(abstained), set(pending)
 
+    # NON-VACUITY FIRST. Every comparison below is over `handled_ids`, so an
+    # empty one made the whole helper return "store agrees" without comparing
+    # anything - and it did, silently, for any caller whose stage happened to
+    # receive nothing. A stage that saw no rows is a fact worth failing on: it
+    # is indistinguishable on the way out from a stage that saw rows and
+    # handled them all correctly.
+    assert handled_ids, (
+        "no rows were handled, so the agreement check compared nothing; a stage "
+        "given an empty residual set must not read as a stage that agreed"
+    )
+
     reported = confirmed_ids | abstained_ids | pending_ids
     assert reported <= handled_ids, sorted(reported - handled_ids)
     assert len(confirmed_ids) + len(abstained_ids) + len(pending_ids) == len(reported), (
@@ -71,12 +92,35 @@ def assert_result_matches_store(
         for i in pending_ids
         if status[i] is not ExceptionStatus.PENDING_AI_UNAVAILABLE
     )
-    # THE HALF THAT WAS BROKEN. A row the stage EXAMINED must not still be
-    # telling an operator the model is unavailable for it.
+    # THE HALF THAT WAS BROKEN, kept as its own sentence because it is the
+    # specific defect this helper was written for and the message should say so.
     wrong += sorted(
         f"{i} was examined and abstained, store still says PENDING_AI_UNAVAILABLE"
         for i in abstained_ids
         if status[i] is ExceptionStatus.PENDING_AI_UNAVAILABLE
+    )
+    # AND THE REST OF AN ABSTAINED ROW'S FATE. Flagging only the pending case
+    # left the SAME divergence class - result and store disagreeing about what
+    # became of a row - unguarded in every other pair of statuses. A row the
+    # result filed under abstained while the store had CONFIRMED it returned
+    # "store agrees", which is the original bug with two different labels on it.
+    #
+    # An abstention LEAVES A ROW WHERE IT WAS: OPEN or PENDING_EVIDENCE, both
+    # still residual, or OPEN via the recovery edge if an outage had marked it.
+    # ABSTAINED itself is legal for a row a later actor moved. CONFIRMED and
+    # CLOSED are resolutions, and a resolved row the result counts as an
+    # abstention is the abstention-rate denominator lying.
+    wrong += sorted(
+        f"{i} reported ABSTAINED, store says {status[i].value}"
+        for i in abstained_ids
+        if status[i]
+        not in {
+            ExceptionStatus.OPEN,
+            ExceptionStatus.PENDING_EVIDENCE,
+            ExceptionStatus.ABSTAINED,
+            # Named by the sentence above rather than reported twice.
+            ExceptionStatus.PENDING_AI_UNAVAILABLE,
+        }
     )
 
     # AND THE AGGREGATE, not only per-row. Every handled row the store holds as

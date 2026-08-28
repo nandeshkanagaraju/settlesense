@@ -937,6 +937,53 @@ def test_the_agreement_check_fires_when_the_store_is_left_behind() -> None:
             pending=[],
         )
 
+    # THE SAME DIVERGENCE CLASS IN A DIFFERENT PAIR OF STATUSES. The helper
+    # originally flagged an abstained row only when the store still said
+    # PENDING_AI_UNAVAILABLE, so a row the result filed under abstained while
+    # the store had CONFIRMED it returned "store agrees" - the original bug
+    # with two different labels on it, and the abstention-rate denominator
+    # counting a resolved exception.
+    for resolved in (ExceptionStatus.CONFIRMED, ExceptionStatus.CLOSED):
+        mislabelled = FakeStore([FakeRow("a", resolved)])
+        with pytest.raises(AssertionError, match="reported ABSTAINED, store says"):
+            assert_result_matches_store(
+                mislabelled,  # type: ignore[arg-type]
+                handled=["a"],
+                confirmed=[],
+                abstained=["a"],
+                pending=[],
+            )
+
+    # AND IT MUST NOT FIRE ON THE STATUSES AN ABSTENTION LEGITIMATELY LEAVES.
+    # An abstention leaves a row where it was, and OPEN is also where the
+    # recovery edge puts one. A guard that failed here would be unusable and
+    # would be deleted rather than fixed.
+    for untouched in (
+        ExceptionStatus.OPEN,
+        ExceptionStatus.PENDING_EVIDENCE,
+        ExceptionStatus.ABSTAINED,
+    ):
+        assert "store agrees" in assert_result_matches_store(
+            FakeStore([FakeRow("a", untouched)]),  # type: ignore[arg-type]
+            handled=["a"],
+            confirmed=[],
+            abstained=["a"],
+            pending=[],
+        )
+
+    # AN EMPTY COMPARISON IS NOT AN AGREEMENT. Every check in the helper is
+    # bounded by `handled`, so an empty one returned "store agrees" having
+    # compared nothing - indistinguishable on the way out from a stage that
+    # handled every row correctly.
+    with pytest.raises(AssertionError, match="compared nothing"):
+        assert_result_matches_store(
+            FakeStore([]),  # type: ignore[arg-type]
+            handled=[],
+            confirmed=[],
+            abstained=[],
+            pending=[],
+        )
+
     # And it PASSES when they agree, or it would just fail on everything.
     agreed = FakeStore([FakeRow("a", ExceptionStatus.PENDING_AI_UNAVAILABLE)])
     assert "store agrees" in assert_result_matches_store(
