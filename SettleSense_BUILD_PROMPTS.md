@@ -1082,12 +1082,83 @@ M9 settlesense/export/tally.py:
 - On successful export, transition each exported exception CONFIRMED -> CLOSED, set
   closed_day, and append an export audit entry. The exporter is the ONLY writer of CLOSED.
 
+M9 AMENDMENT, added 2026-08-28 after the seed-999 holdout run (commit 0c44419).
+These two requirements were written in response to that run's results and are dated
+so nobody reads them as foresight:
+
+- THE EXPORT CANNOT DETECT ITS OWN WORST INPUT. The export runs on CONFIRMED
+  exceptions, and the holdout confirmed 52 split settlements under a WRONG category
+  (T_PLUS_N_TIMING x48, PARTIAL_CAPTURE x4). Each of those confirmations is locally
+  consistent with the evidence attached to it, so no assertion inside the exporter
+  can distinguish them from correct ones. A journal entry carrying a wrong category
+  is worse than no entry.
+  THEREFORE: every exported batch carries a header line stating the dataset, the
+  seed, the config_hash, and the measured residual false-match rate for THAT dataset.
+  An accountant importing this must be able to see what the numbers rest on.
+  - The rate is INJECTED, not computed. It is truth-derived (eval/metrics.py,
+    Population A) and settlesense/ must never reach truth or read reports/. It
+    arrives as a required argument the same way as_of does, supplied by the caller
+    from reports/<dataset>/results.json ->
+    population_a_case_count_denominator.residual_false_match_rate_case_count.
+  - It is a required argument with NO default. A batch whose rate is unknown does not
+    export - it raises. A header field left blank is the failure this requirement
+    exists to prevent, restated one layer down.
+  - Assert the header is present and carries the REAL measured rate: the test reads
+    the figure out of the eval artifact and compares, never a literal typed from this
+    brief. Fault-inject both directions - a wrong rate must fail, and a missing rate
+    must raise rather than emit.
+  - The header fields go INSIDE the idempotency key. Today the key is
+    sha256(sorted exception_ids | batch_date) and does not include config_hash, so
+    the same confirmed set exported under two different configs would produce the
+    same filename with different content. Adding a header without adding it to the
+    key breaks test 6's meaning rather than satisfying it.
+
+- LABEL THE OUTPUT PRECISELY, IN THE FILE ITSELF AND IN THE README. The XSD is
+  bundled and validated against; it has NOT been tested against a live Tally
+  instance. The phrase, verbatim, both places:
+      "schema-validated Tally-compatible XML; not tested against a live Tally instance"
+  Do not describe it as an integration anywhere - not in the README, not in a
+  docstring, not in a commit message. Assert the phrase is present and that the word
+  "integration" does not appear on the export path.
+
 M10 degradation, in settlesense/ai/client.py and the orchestrator:
 - Timeout, HTTP error, or invalid JSON after 2 retries -> raise ModelUnavailable
 - The orchestrator catches it, marks affected residuals PENDING_AI_UNAVAILABLE,
   leaves deterministic results untouched, confirms nothing, and returns normally
 - The next run picks those exceptions back up
 - Add a --simulate-outage flag to the runner for the demo
+
+M10 AMENDMENT, added 2026-08-28. Four requirements, each stating what must be
+asserted rather than what must be avoided:
+
+- PENDING_AI_UNAVAILABLE MUST BE DISTINGUISHABLE FROM PENDING_EVIDENCE, in the queue
+  and in every report. One is a service failure, the other is data that has not
+  arrived yet, and collapsing them reports a model outage as a normal waiting state.
+  Assert they render as distinct labels AND carry distinct reasons.
+  NOTE, already true in the tree: the M8 colour list above names five statuses and
+  omits PENDING_EVIDENCE, so settlesense/ui/queue.py gave both the same blue
+  (#0969da on #ddf4ff). The labels differ; the colours do not. Fix the colour as part
+  of this and assert the two StatusStyle entries differ in every field, not only in
+  label - an equality check on the whole dataclass, so a future edit cannot collapse
+  them again by copying a line.
+
+- ASSERT ZERO CONFIRMATIONS OCCUR WHILE THE CLIENT IS DOWN. Exactly 0, not "few".
+  The outage path must not resolve anything, correctly or otherwise. This strengthens
+  test 13 from a property of the run to a property of the path.
+
+- ASSERT THE DETERMINISTIC RESULTS ARE BYTE-IDENTICAL WITH AND WITHOUT THE OUTAGE.
+  A model failure must not perturb a single rule-resolved case. This is the strongest
+  form of the graceful-degradation claim and it is checkable: serialize both runs and
+  compare bytes, the same way the M5a telemetry separation was proven against
+  reports/eval/results.json. Compare the serialized payload, not a summary of it -
+  a count that matches is not the same claim.
+
+- --simulate-outage MUST FAIL THE RUN LOUDLY IF THE CLIENT IS NOT REACHABLE TO BEGIN
+  WITH, so the demo cannot silently show an outage that was really a
+  misconfiguration. Probe first, then break it. If the probe fails, exit non-zero
+  with a message naming the difference. Fault-inject it: an unreachable client under
+  --simulate-outage must be a hard failure, and the test asserts the exit status, not
+  just that a message appeared.
 ```
 
 ### Test prompt
@@ -1115,6 +1186,33 @@ Degradation:
 15. Invalid JSON twice triggers the same safe path as a timeout
 16. Partial outage — 3 of 10 calls fail — leaves 7 processed and 3 pending, nothing lost
 17. Database state after an outage run is valid and re-runnable
+
+Added by the 2026-08-28 amendment. Every one of these asserts a realised value read
+from an artifact or a run; none of them may compare against a literal typed from this
+document.
+
+Export:
+18. The batch header is present and carries dataset, seed, config_hash and the
+    residual false-match rate — the rate READ from reports/<dataset>/results.json,
+    not typed here
+19. A batch built with no rate supplied RAISES. Fault injection: a wrong rate fails
+    the header assertion, proving test 18 is load-bearing
+20. Two batches with the same exception_ids but different config_hash produce
+    DIFFERENT idempotency keys and therefore different filenames
+21. The exporter module and the README both contain "not tested against a live Tally
+    instance" verbatim, and the word "integration" appears nowhere on the export path
+
+Degradation:
+22. STATUS_STYLES[PENDING_AI_UNAVAILABLE] != STATUS_STYLES[PENDING_EVIDENCE] in every
+    field, and both views render the two with different labels AND different colours
+23. Exactly 0 exceptions are CONFIRMED during an outage run. Assert the realised
+    count and print it
+24. The serialized deterministic payload is byte-identical with and without the
+    outage. Compare bytes
+25. --simulate-outage against an unreachable client exits NON-ZERO with a message
+    naming the difference, rather than reporting a successful outage demo
+26. Fault injection for 25: the guard fires when the client is unreachable and does
+    NOT fire when it is reachable
 ```
 
 ---
