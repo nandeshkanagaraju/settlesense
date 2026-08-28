@@ -301,6 +301,59 @@ actually measured — plus a per-row figure whose basis is stated:
 the point of the correction is that a per-row cost is meaningless without the
 row count it was divided by.
 
+### Two AI measurements, on two paths, neither correcting the other
+
+> **AI layer, dataset-derived decisions (M7): 507 decisions, 27 confirmable,
+> zero false confirms.**
+>
+> **AI layer, persisted store path: 22 pairs replayed, 1 confirmed, 21
+> abstained, zero false confirms. 3 residual rows had no partner and are
+> excluded.**
+
+The first is *the measurement*; the second is *the wiring proof*. They are
+different paths over the same duplicates and both stand as recorded.
+[`reports/ai/store_path.json`](reports/ai/store_path.json) (`make ai-store`).
+
+**Why the second one exists.** `--simulate-outage` exposed that the AI layer had
+never run against the exception store: M7 was measured over dataset-derived
+pair exceptions, the store persists engine outcomes under hash ids, and the two
+sets had zero ids in common. So no persisted row carried
+`resolved_by = AI_VERIFIED`, and the queue read as an AI layer that existed only
+in tests. It now shows **283 DETERMINISTIC and 2 AI_VERIFIED**.
+
+**The pairing key, stated because it is a rule that changes which decisions get
+made:**
+
+> Store rows are paired at read time on (gross amount, settlement batch). This
+> nominates candidates only; the verifier still decides from evidence.
+
+Nothing is persisted — the join is computed when the stage runs and discarded —
+so **no Population A/B/C denominator moves**: 5,026 / 39 / 29 before and after,
+with the same 326 / 11 / 2 persisted rows. Population A's *residual* drops
+52 → 50, which is the two rows the AI explained.
+
+**The result worth reading is the gap between right and provable.**
+
+| Store path, 22 pairs | |
+|---|---:|
+| Model produced a hypothesis | 22 / 22 |
+| Nominated the truth-correct order | **14 / 22** |
+| **Verifier confirmed** | **1** |
+| **False confirms** | **0** |
+
+The model named the right order 14 times and the verifier confirmed **one**. The
+other 13 correct answers were rejected — `ALL_REJECTED`, meaning the verifier
+looked and the evidence could not support the claim. Being right is not the same
+as being provable, and a system that confirmed every correct guess would also
+confirm the incorrect ones it could not tell apart. The single confirmation is
+checked against truth and is correct.
+
+**Zero was spent.** All 22 prompts were already in `fixtures/llm/` from the M7
+recording session — the store's pairs and the dataset's pairs describe the same
+duplicates. The gap was a read-time join, not missing recordings. A 47-row
+recording against the live model was considered and **not** done; see
+[LIMITATIONS.md](LIMITATIONS.md) for the measurement that ruled it out.
+
 ### Held-out set — seed 999 (`make eval-holdout`)
 
 **RUN ONCE, on 2026-08-27, after M8. Nothing was adjusted afterwards** — not a

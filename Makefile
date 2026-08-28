@@ -26,7 +26,7 @@ define notimpl
 	@exit 1
 endef
 
-.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop record-fixtures demo-state ui ui-static ui-outage export check golden-accept bench config-check fault-report collection-baseline eval-holdout
+.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop record-fixtures demo-state ui ui-static ui-outage ai-store export check golden-accept bench config-check fault-report collection-baseline eval-holdout
 
 help:
 	@echo "SettleSense targets:"
@@ -49,6 +49,7 @@ help:
 	@echo "  ui-static     evidence queue as one HTML file (read-only)"
 	@echo "  export        CONFIRMED -> Tally-compatible XML, dry run (M9)"
 	@echo "  ui-outage     the queue with a simulated model outage (M10)"
+	@echo "  ai-store      replay the AI layer over the persisted store (no spend)"
 	@echo "  golden-accept regenerate golden files (deliberately awkward)"
 
 # --- data generation --------------------------------------------------------
@@ -212,7 +213,16 @@ ui: demo-state
 # The static page is what gets screenshotted for the README and recorded for a
 # video: legibility matters more than interactivity, and a file on disk is
 # easier to capture than a server that has to be running.
-ui-static: demo-state
+# The AI layer against the PERSISTED store. Zero model calls and zero spend:
+# every prompt was already recorded during the M7 session, because the store's
+# pairs and the dataset's pairs describe the same duplicates. Rebuilds the
+# demo DB so the queue shows AI_VERIFIED rows rather than reading as a layer
+# that exists only in tests.
+ai-store:
+	$(PYTHON) -m eval.run_store_ai --data data/dev --db reports/ui/state.db \
+	  --out reports/ai/store_path.json
+
+ui-static: ai-store
 	$(PYTHON) -m settlesense.ui.build_static --db reports/ui/state.db --out reports/ui/queue.html
 
 # M10. The queue with a model outage in it, so the two waiting states can be

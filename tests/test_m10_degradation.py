@@ -75,6 +75,9 @@ def config() -> AppConfig:
 
 
 def _store(config: AppConfig, path: Path, days: tuple[int, ...] = CHECKPOINTS) -> ExceptionStore:
+    """Build a store over `days`. Used only where the day range is NOT the
+    template's - everything on 1/12/24 takes a copy via `fresh_store`, because
+    rebuilding cost ~1.6s a time and took the suite to 97% of the budget."""
     built = ExceptionStore(path)
     for day in days:
         built.run_day(day, DATA, config)
@@ -178,7 +181,7 @@ def test_10_and_15_timeout_http_error_and_bad_json_all_end_in_model_unavailable(
 
 @pytest.mark.charter_guard
 def test_an_outage_is_not_a_fixture_miss_and_a_fixture_miss_is_not_an_outage(
-    config: AppConfig, tmp_path: Path
+    config: AppConfig, fresh_store: Any
 ) -> None:
     """The two paths must not converge. This is the load-bearing distinction.
 
@@ -187,7 +190,7 @@ def test_an_outage_is_not_a_fixture_miss_and_a_fixture_miss_is_not_an_outage(
     unrecorded prompt would report as a service failure and the outage numbers
     would measure the fixture set.
     """
-    store = _store(config, tmp_path / "paths.db")
+    store = fresh_store()
     dataset = store.cumulative_dataset(OUTAGE_DAY, DATA, config)
     residual = store.get_queue(status_filter=RESIDUAL_STATES)
     subject = next(row for row in residual if row.category == "DUPLICATE_CANDIDATE")
@@ -217,7 +220,7 @@ def test_an_outage_is_not_a_fixture_miss_and_a_fixture_miss_is_not_an_outage(
 
 @pytest.mark.charter_guard
 def test_11_12_13_an_outage_confirms_exactly_zero_and_pends_the_rest(
-    config: AppConfig, tmp_path: Path
+    config: AppConfig, fresh_store: Any
 ) -> None:
     """Requirements 11, 12 and 13 together, on one realised run.
 
@@ -225,7 +228,7 @@ def test_11_12_13_an_outage_confirms_exactly_zero_and_pends_the_rest(
     confirmations is trivial if nothing was sent, and "rows are pending" is
     trivial if the deterministic rows moved too.
     """
-    store = _store(config, tmp_path / "outage.db")
+    store = fresh_store()
     dataset = store.cumulative_dataset(OUTAGE_DAY, DATA, config)
     before_confirmed = {
         row.exception_id
@@ -260,7 +263,7 @@ def test_11_12_13_an_outage_confirms_exactly_zero_and_pends_the_rest(
 
 @pytest.mark.charter_guard
 def test_24_the_deterministic_result_is_byte_identical_with_and_without_the_outage(
-    config: AppConfig, tmp_path: Path
+    config: AppConfig, fresh_store: Any
 ) -> None:
     """BYTES, not a count. The strongest form of the degradation claim.
 
@@ -275,8 +278,8 @@ def test_24_the_deterministic_result_is_byte_identical_with_and_without_the_outa
       stage writes to the store, and a bug that marked the wrong rows would
       leave the engine untouched and the store wrong.
     """
-    healthy = _store(config, tmp_path / "healthy.db")
-    broken = _store(config, tmp_path / "broken.db")
+    healthy = fresh_store()
+    broken = fresh_store()
     dataset = healthy.cumulative_dataset(OUTAGE_DAY, DATA, config)
     as_of = as_of_for_arrival_day(OUTAGE_DAY, config)
 
@@ -311,14 +314,14 @@ def test_24_the_deterministic_result_is_byte_identical_with_and_without_the_outa
     )
 
 
-def test_16_a_partial_outage_loses_nothing(config: AppConfig, tmp_path: Path) -> None:
+def test_16_a_partial_outage_loses_nothing(config: AppConfig, fresh_store: Any) -> None:
     """3 of N fail; the rest are processed; the three come back next run.
 
     The failing rows are the FIRST three in queue order, which is deterministic
     - `get_queue` sorts by (-amount, exception_id) - so this run is reproducible
     rather than depending on which call the flakiness happened to land on.
     """
-    store = _store(config, tmp_path / "partial.db")
+    store = fresh_store()
     dataset = store.cumulative_dataset(OUTAGE_DAY, DATA, config)
     client = FlakyClient(failures=3)
     result = run_ai_stage(store, dataset, config, client, OUTAGE_DAY)
@@ -449,7 +452,7 @@ def test_both_waiting_states_render_side_by_side(config: AppConfig, tmp_path: Pa
 
 @pytest.mark.boundary_refusal
 def test_25_and_26_simulate_outage_refuses_when_the_client_is_unreachable(
-    config: AppConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    config: AppConfig, tmp_path: Path, fresh_store: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Non-zero exit, naming the difference. Fault-injected both ways.
 
@@ -458,7 +461,7 @@ def test_25_and_26_simulate_outage_refuses_when_the_client_is_unreachable(
     a real outage. Without the probe there is nothing in the output that could
     tell the two apart.
     """
-    store = _store(config, tmp_path / "probe.db")
+    store = fresh_store()
     dataset = store.cumulative_dataset(OUTAGE_DAY, DATA, config)
 
     # Reachable: the probe passes and says what it checked.
@@ -525,14 +528,14 @@ def test_the_ai_stage_runs_only_under_the_flag(config: AppConfig, tmp_path: Path
     print(f"\n  no flag: statuses {sorted(status.value for status in statuses)}, no AI resolver")
 
 
-def test_run_loop_counts_three_outcomes_that_add_up(config: AppConfig, tmp_path: Path) -> None:
+def test_run_loop_counts_three_outcomes_that_add_up(config: AppConfig, fresh_store: Any) -> None:
     """confirmed + abstained + unavailable == sent, and the rate excludes outages.
 
     `abstained` used to be `sent - confirmed`. That was correct with two
     outcomes and silently absorbs a third: every outage would have been
     reported as an abstention with no line of loop.py changing.
     """
-    store = _store(config, tmp_path / "counts.db")
+    store = fresh_store()
     dataset = store.cumulative_dataset(OUTAGE_DAY, DATA, config)
     residual = tuple(store.get_queue(status_filter=RESIDUAL_STATES))
 
@@ -572,13 +575,13 @@ def test_the_engine_was_not_touched_by_either_module() -> None:
     print(f"\n  {len(VarianceCategory)} categories unchanged; neither module runs the engine")
 
 
-def test_the_outage_client_records_what_it_was_asked(config: AppConfig, tmp_path: Path) -> None:
+def test_the_outage_client_records_what_it_was_asked(config: AppConfig, fresh_store: Any) -> None:
     """ "Nothing was sent" and "everything failed" must be distinguishable.
 
     A run reporting 53 unavailable could mean the model was down or that the
     stage never ran. The client's call log is what separates them.
     """
-    store = _store(config, tmp_path / "calls.db")
+    store = fresh_store()
     dataset = store.cumulative_dataset(OUTAGE_DAY, DATA, config)
     client = OutageLLMClient()
     result = run_ai_stage(store, dataset, config, client, OUTAGE_DAY)
@@ -587,9 +590,9 @@ def test_the_outage_client_records_what_it_was_asked(config: AppConfig, tmp_path
     print(f"\n  {len(client.calls)} prompts attempted, all distinct, all failed")
 
 
-def test_the_ai_stage_never_writes_closed(config: AppConfig, tmp_path: Path) -> None:
+def test_the_ai_stage_never_writes_closed(config: AppConfig, fresh_store: Any) -> None:
     """SDD 3: the exporter is the only writer of CLOSED. An outage is not an export."""
-    store = _store(config, tmp_path / "closed.db")
+    store = fresh_store()
     dataset = store.cumulative_dataset(OUTAGE_DAY, DATA, config)
     run_ai_stage(store, dataset, config, OutageLLMClient(), OUTAGE_DAY)
     closed = [row for row in store.get_queue(ALL_STATUSES) if row.status is ExceptionStatus.CLOSED]

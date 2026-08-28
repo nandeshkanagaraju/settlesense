@@ -36,14 +36,14 @@ summary { cursor: pointer; color: #0969da; font-size: 12.5px; }
 calendar calendar_v1 · config 12e9a009b59251d8</p>
 
 <h2>Populations</h2>
-<div class="pops"><div class="pop"><b>52</b> residual<br><span>of 5,026 payments</span><br><span>A · case · 326 tracked</span></div><div class="pop"><b>2</b> residual<br><span>of 39 batches</span><br><span>B · batch link · 11 tracked</span></div><div class="pop"><b>2</b> residual<br><span>of 29 rows</span><br><span>C · row variance · 2 tracked</span></div></div><p class="caption">Three populations, three denominators. They are never averaged into one rate: a batch is not a payment, and dividing one by the other would produce a number about nothing.</p>
+<div class="pops"><div class="pop"><b>50</b> residual<br><span>of 5,026 payments</span><br><span>A · case · 326 tracked</span></div><div class="pop"><b>2</b> residual<br><span>of 39 batches</span><br><span>B · batch link · 11 tracked</span></div><div class="pop"><b>2</b> residual<br><span>of 29 rows</span><br><span>C · row variance · 2 tracked</span></div></div><p class="caption">Three populations, three denominators. They are never averaged into one rate: a batch is not a payment, and dividing one by the other would produce a number about nothing.</p>
 
 <h2>Residual over time — Population B</h2>
 <div class="seq"><b>Population B residual: 3 → 6 → 2</b><div style="margin-top:10px"><div style="display:inline-block;text-align:center;margin-right:18px"><div style="height:23px;width:34px;background:#0969da;border-radius:2px 2px 0 0"></div><div style="font-size:12px;margin-top:3px"><b>3</b><br>day 1</div></div><div style="display:inline-block;text-align:center;margin-right:18px"><div style="height:46px;width:34px;background:#0969da;border-radius:2px 2px 0 0"></div><div style="font-size:12px;margin-top:3px"><b>6</b><br>day 12</div></div><div style="display:inline-block;text-align:center;margin-right:18px"><div style="height:15px;width:34px;background:#0969da;border-radius:2px 2px 0 0"></div><div style="font-size:12px;margin-top:3px"><b>2</b><br>day 24</div></div></div><p class="caption">Open batch links rise before they fall: day 12 delivers batches whose credit is not yet due. A residual is a queue, not a burn-down.</p></div>
 
 <h2>Queue</h2>
 <p class="caption"><b>Verified by</b> is the column that carries the thesis:
-56 ABSTAINED, 283 DETERMINISTIC across 339 tracked exceptions. Nearly every resolution is a
+54 ABSTAINED, 2 AI_VERIFIED, 283 DETERMINISTIC across 339 tracked exceptions. Nearly every resolution is a
 rule, not a model.</p>
 <p class="caption">Showing the 40 largest of 339 tracked exceptions, sorted by amount. Nothing is hidden by filtering — the rest are smaller.</p>
 <p class="caption"><b>Confidence 0.00</b> means NOT SCORED, not "certainly wrong":

@@ -46,6 +46,11 @@ eval-holdout/*
 !ai/
 ai/*
 !ai/ai_loop.json
+# The store-path measurement is committed for the same reason, and for one
+# more: it is the SECOND of two AI numbers, and a reader has to be able to
+# check that it is a different measurement rather than a revision of the
+# first. It also carries the pairing key, which is a published rule.
+!ai/store_path.json
 
 # The rendered queue is committed - the README links it and the screenshots come
 # from it. state.db is NOT: it is a build output of `make demo-state`, it is

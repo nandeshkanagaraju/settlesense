@@ -13,11 +13,15 @@ capable of failing".
 
 from __future__ import annotations
 
+import itertools
+import pathlib
+import shutil
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 
+from settlesense.exceptions.store import ExceptionStore
 from tests import amplification, budget
 
 # marker -> the human-facing heading in the summary
@@ -221,3 +225,53 @@ def _report_interactions(terminalreporter: pytest.TerminalReporter) -> None:
     terminalreporter.write_sep("=", "rate-amplified interactions")
     for line in lines:
         terminalreporter.write_line(line)
+
+
+# ===========================================================================
+# A prebuilt dev store, built ONCE per session and copied per test
+#
+# WHY. `run_day` over the three checkpoints costs ~1.6s, and the M9/M10 suites
+# need a WRITEABLE store per test - CLOSED is terminal, and the AI stage
+# mutates statuses, so sharing one instance would let each test read a store
+# the previous one moved. Rebuilding per test pushed the suite to 97% of the
+# SDD 7 budget on its own.
+#
+# Copying a 274KB SQLite file is effectively free, and the copy is a byte-exact
+# equivalent of the rebuild: `run_day` is deterministic and reads no clock, so
+# there is no state in the file that depends on when it was made.
+# ===========================================================================
+
+DEV_CHECKPOINTS = (1, 12, 24)
+
+
+@pytest.fixture(scope="session")
+def dev_store_template(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
+    """Path to a dev store built over days 1, 12, 24. Do NOT open for writing."""
+    from settlesense.config import load_config
+
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    path = tmp_path_factory.mktemp("template") / "state.db"
+    config = load_config(repo / "config")
+    with ExceptionStore(path) as store:
+        for day in DEV_CHECKPOINTS:
+            store.run_day(day, repo / "data" / "dev", config)
+    return path
+
+
+@pytest.fixture
+def fresh_store(
+    dev_store_template: pathlib.Path, tmp_path: pathlib.Path
+) -> Callable[[], ExceptionStore]:
+    """A private writeable copy of the template, per call.
+
+    Returns a FACTORY rather than a store so one test can take several - the
+    byte-comparison tests need a before and an after that cannot share a file.
+    """
+    counter = itertools.count()
+
+    def make() -> ExceptionStore:
+        target = tmp_path / f"store-{next(counter)}.db"
+        shutil.copy2(dev_store_template, target)
+        return ExceptionStore(target)
+
+    return make

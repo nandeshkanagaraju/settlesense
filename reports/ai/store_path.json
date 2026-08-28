@@ -1,0 +1,430 @@
+{
+  "false_confirms": 0,
+  "m7_line": "AI layer, dataset-derived decisions (M7): 507 decisions, 27 confirmable, zero false confirms.",
+  "model": "gpt-4o-2024-08-06",
+  "pairing_key_note": "Store rows are paired at read time on (gross amount, settlement batch). This nominates candidates only; the verifier still decides from evidence.",
+  "pairs_abstained": 21,
+  "pairs_confirmed": 1,
+  "pairs_replayed": 22,
+  "per_pair": [
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "15001.66",
+      "batch_id": "BAT_995B5FFD2724",
+      "confirmed": false,
+      "exception_ids": [
+        "071bd1ddccd056b4",
+        "3a7bc548fea64af9"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_841D96192248",
+      "nominated_correctly": false,
+      "order_ids": [
+        "ORD_2A7BA98A9F2D",
+        "ORD_841D96192248"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "1410.20",
+      "batch_id": "BAT_488D46B24240",
+      "confirmed": false,
+      "exception_ids": [
+        "0897a0e6649e7a13",
+        "2bd25ff2b38815ae"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_ED9EE95CECB7",
+      "nominated_correctly": false,
+      "order_ids": [
+        "ORD_700EA00E2BE5",
+        "ORD_ED9EE95CECB7"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "36142.04",
+      "batch_id": "BAT_5DD8CF6BB1B7",
+      "confirmed": false,
+      "exception_ids": [
+        "0d0adc243fd5b716",
+        "1a67e2323c36bd84"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_1B1C727D900B",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_1B1C727D900B",
+        "ORD_5D1E3D96158F"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "25598.85",
+      "batch_id": "BAT_38FD4BE54614",
+      "confirmed": false,
+      "exception_ids": [
+        "120c4ed1722146d6",
+        "704fb4610aa5bd95"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_836CFBA07F58",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_836CFBA07F58",
+        "ORD_D2F904A70E3D"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "2802.18",
+      "batch_id": "BAT_5E6870506120",
+      "confirmed": false,
+      "exception_ids": [
+        "1589e026cad12145",
+        "69d88a6e94eced41"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_90524E92D5E2",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_90524E92D5E2",
+        "ORD_F14C890D32FA"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "2191.03",
+      "batch_id": "BAT_5E6870506120",
+      "confirmed": false,
+      "exception_ids": [
+        "1a178ba417a05e77",
+        "43c3148e04e9cfd8"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_98EE554C9A69",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_7251A7509974",
+        "ORD_98EE554C9A69"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "7186.24",
+      "batch_id": "BAT_3B2DBBEA3730",
+      "confirmed": false,
+      "exception_ids": [
+        "1b52de7f2bd9b695",
+        "ef0c1f47f3203359"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_88202B14F7D5",
+      "nominated_correctly": false,
+      "order_ids": [
+        "ORD_819BC9BDC1B1",
+        "ORD_88202B14F7D5"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "18449.02",
+      "batch_id": "BAT_8C35832FBD31",
+      "confirmed": false,
+      "exception_ids": [
+        "2266dabcaa3e7a15",
+        "cf5554f7e5492fd4"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_484125798725",
+      "nominated_correctly": false,
+      "order_ids": [
+        "ORD_07F811BC10AE",
+        "ORD_484125798725"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "19466.88",
+      "batch_id": "BAT_AB7E96F74DA8",
+      "confirmed": false,
+      "exception_ids": [
+        "28fe93fd9c032311",
+        "6d1403960a84c5da"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_B183EE646C1A",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_1E425A6604DB",
+        "ORD_B183EE646C1A"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "22081.07",
+      "batch_id": "BAT_19ED03A65407",
+      "confirmed": false,
+      "exception_ids": [
+        "3a88d9875ad841cc",
+        "9d247115f023a310"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_8A149CE87EA0",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_6A182E2A9A8C",
+        "ORD_8A149CE87EA0"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "13424.98",
+      "batch_id": "BAT_38FD4BE54614",
+      "confirmed": false,
+      "exception_ids": [
+        "3a9424559b1913e0",
+        "e8bd19ca7a6bb2ef"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_C55F133F3411",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_2618FA99FA52",
+        "ORD_C55F133F3411"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "3334.67",
+      "batch_id": "BAT_15F19E75922D",
+      "confirmed": false,
+      "exception_ids": [
+        "484dbbdf412811d6",
+        "4a697f3059d79bab"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_9242EBFF57EF",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_9242EBFF57EF",
+        "ORD_B8A31A075489"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "25482.45",
+      "batch_id": "BAT_325D963A2E2E",
+      "confirmed": false,
+      "exception_ids": [
+        "515056debd912483",
+        "7a97f8a2b005be20"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_CE2F0258501E",
+      "nominated_correctly": false,
+      "order_ids": [
+        "ORD_AE5BEDB49B67",
+        "ORD_CE2F0258501E"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "51454.77",
+      "batch_id": "BAT_03028EE4175A",
+      "confirmed": false,
+      "exception_ids": [
+        "518cbb0e4d108530",
+        "8d38e0b6160c1e2b"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_1DF616C8EB3B",
+      "nominated_correctly": false,
+      "order_ids": [
+        "ORD_1411B20C04B4",
+        "ORD_1DF616C8EB3B"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "20710.13",
+      "batch_id": "BAT_9952F1823E49",
+      "confirmed": false,
+      "exception_ids": [
+        "57e3bc78d2e50a2e",
+        "9a95b40e78b82a5d"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_AB96DEFA8ED1",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_AB96DEFA8ED1",
+        "ORD_E172B888D830"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "7560.59",
+      "batch_id": "BAT_E7A5C6DA6892",
+      "confirmed": false,
+      "exception_ids": [
+        "691be724d7c5a1dc",
+        "b20d110fd0fd0eeb"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_28ED0097E049",
+      "nominated_correctly": false,
+      "order_ids": [
+        "ORD_28ED0097E049",
+        "ORD_F03AF03B146D"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "8911.24",
+      "batch_id": "BAT_3BBDB4570180",
+      "confirmed": false,
+      "exception_ids": [
+        "8a15429ce8689f03",
+        "aa62d675ec57ea6f"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_88A3FF68D829",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_4D55A489A4A9",
+        "ORD_88A3FF68D829"
+      ]
+    },
+    {
+      "abstain_reason": null,
+      "amount": "39644.16",
+      "batch_id": "BAT_325D963A2E2E",
+      "confirmed": true,
+      "exception_ids": [
+        "9d2748605e599894",
+        "a6a07afd5a1bead2"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_4430E6EDE984",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_4430E6EDE984",
+        "ORD_EB9D05B89AA8"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "19548.33",
+      "batch_id": "BAT_19ED03A65407",
+      "confirmed": false,
+      "exception_ids": [
+        "adc07f789c1ea2bd",
+        "b6ce8a4fc406d11a"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_5B715F658A11",
+      "nominated_correctly": false,
+      "order_ids": [
+        "ORD_240B7B7F6897",
+        "ORD_5B715F658A11"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "1068.93",
+      "batch_id": "BAT_19ED03A65407",
+      "confirmed": false,
+      "exception_ids": [
+        "b17ec541b54a9564",
+        "bbed65c3c4ce7d1f"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_798DEFD0F836",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_798DEFD0F836",
+        "ORD_B1C48710E634"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "3554.89",
+      "batch_id": "BAT_D66001038576",
+      "confirmed": false,
+      "exception_ids": [
+        "b7398a2d1e07aa03",
+        "be696498def9dff8"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_745E3CFCF0BC",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_68F8BE29249E",
+        "ORD_745E3CFCF0BC"
+      ]
+    },
+    {
+      "abstain_reason": "ALL_REJECTED",
+      "amount": "1186.73",
+      "batch_id": "BAT_26744131B651",
+      "confirmed": false,
+      "exception_ids": [
+        "e5d23d4f712e5414",
+        "e5dc504e879a2f3c"
+      ],
+      "false_confirm": false,
+      "model_gave_a_hypothesis": true,
+      "nominated": "ORD_429320B5281D",
+      "nominated_correctly": true,
+      "order_ids": [
+        "ORD_429320B5281D",
+        "ORD_F71F366DAC9E"
+      ]
+    }
+  ],
+  "resolved_by_counts": {
+    "AI_VERIFIED": 2,
+    "DETERMINISTIC": 283,
+    "HUMAN": 0,
+    "unresolved": 54
+  },
+  "rows_abstained": 42,
+  "rows_confirmed": 2,
+  "status_counts": {
+    "ABSTAINED": 0,
+    "CLOSED": 0,
+    "CONFIRMED": 285,
+    "OPEN": 54,
+    "PENDING_AI_UNAVAILABLE": 0,
+    "PENDING_EVIDENCE": 0
+  },
+  "store_path_line": "AI layer, persisted store path: 22 pairs replayed, 1 confirmed, 21 abstained, 0 false confirms. 3 residual rows had no partner and are excluded.",
+  "unpaired_count": 3,
+  "unpaired_rows": [
+    "1c00bb07bfc2b282",
+    "353f7e182ee9257e",
+    "ac08c9072ac7c56a"
+  ]
+}

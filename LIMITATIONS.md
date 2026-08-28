@@ -84,9 +84,64 @@ done it:
 Recorded rather than quietly omitted, because a reader comparing the dev and
 holdout tables will notice one row present in one and absent in the other.
 
+## A result can mean something other than what it looks like: the 47-row recording that was not bought
+
+**The class first, because it generalises past this instance.** A result whose
+*surface* matches the story you expected, while its *cause* is different, is the
+hardest kind to catch from the number alone. Nothing about it looks wrong. It
+agrees with the hypothesis. It only fails if somebody asks *why* it came out
+that way — and the number itself never prompts that question.
+
+**The instance.** `--simulate-outage` found that the AI layer had never run
+against the exception store (below). The obvious fix was to record fixtures for
+the store's 47 `DUPLICATE_CANDIDATE` rows against the live model, ~₹25 at the
+measured ₹0.4845/decision, and publish the outcome. A near-zero confirmation
+count was expected and would have been publishable: M7 abstains on 480 of 507,
+so "structural evidence is absent in the store path too" is a coherent finding.
+
+**Why it was not done.** A store row carries exactly ONE evidence id — the
+settlement batch — so the prompt built from it lists a single id and then
+instructs the model to pick *"the single row you believe is the duplicate
+entry"* from that list. A choice from a list of one. Checked before spending,
+with the oracle, which nominates the truth-correct row by construction and is
+therefore the ceiling no model can beat:
+
+```
+ORACLE over 47 store rows -> confirmed: 0
+   47  NO_HYPOTHESIS
+distinct evidence ids across the 47 rows: 18   (all batch ids)
+evidence ids that are order ids in truth:  0
+```
+
+**`NO_HYPOTHESIS`, not `ALL_REJECTED`, is the whole finding.** A rejection would
+mean the verifier examined a claim and refused it — a statement about evidence.
+`NO_HYPOTHESIS` means no claim could be formed at all. And with zero of the 18
+evidence ids scoreable against truth, no nomination on that path could have been
+graded in either direction.
+
+So "0 of 47 confirmed" would have read as *the evidence does not distinguish the
+candidates* while actually meaning *the prompt contained no question*. Same
+number, same shape, different cause — and ₹25 spent to produce it.
+
+**What was done instead cost nothing.** The store's pairs and M7's dataset-derived
+pairs describe the same duplicates: 22 of 22 prompts were already recorded. The
+gap was a read-time join. `settlesense/ai/pairing.py` groups rows on (gross
+amount, settlement batch), replays the existing fixture, and writes the verdict
+onto both rows — 22 pairs, 1 confirmed, 0 false confirms, no denominator moved.
+
+`tests/test_m10_store_path.py` keeps the oracle measurement, so the reasoning
+that avoided the spend stays checkable rather than surviving only in this file.
+
 ## The AI layer and the exception store operate on disjoint objects
 
 Found while building M10, and it changes what the outage demo can claim.
+
+**CLOSED as of 2026-08-28, by a read-time join rather than by recording — see
+the section above.** The entry is kept rather than deleted because how it was
+found is worth more than the fact that it is closed: it surfaced from
+`--simulate-outage`'s own probe on its first run, reporting that 0 of 53
+AI-eligible rows had a recording. A guard written to stop a demo faking an
+outage is what exposed that a whole layer was unwired.
 
 **The M7 hypothesis loop was measured over dataset-derived pair exceptions** —
 `duplicate_exceptions(dataset)`, ids of the form `dup-ORD_A-ORD_B`, evidence
@@ -111,11 +166,12 @@ is what a *healthy* run would have concluded for those rows — nobody has
 recorded a response for any of them. `probe()` prints exactly that on every
 `--simulate-outage` run rather than letting a screenshot imply otherwise.
 
-**Not fixed here, and the choice is deliberate.** Joining the two would mean
-either recording ~53 new fixtures against a live model, or persisting the
-pair-exceptions into the store — which would add rows to the queue and change
-the Population A/B/C denominators every published number divides by. Both are
-larger decisions than a degradation module should make on its own.
+**How it was closed, and the option that was rejected.** Persisting the
+pair-exceptions into the store would have added rows and moved the Population
+A/B/C denominators every published number divides by; recording against the
+store's own ids would have bought 47 non-answers. The read-time join does
+neither. The M7 figure is untouched and the store-path result is published
+beside it as a second measurement, never as a revision.
 
 ## The duplicate-pair task is fingerprinted, and the fingerprint is worthless
 
