@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ast
 import collections
+import itertools
 import re
 from datetime import date
 from decimal import Decimal
@@ -35,6 +36,7 @@ from settlesense.types import ExceptionStatus, ResolutionSource
 from settlesense.ui.queue import (
     POPULATION_LABELS,
     STATUS_STYLES,
+    StatusStyle,
     arrival_days,
     as_display_dict,
     build_rows,
@@ -299,6 +301,125 @@ def test_confirmed_and_closed_are_visibly_distinct() -> None:
     assert "✓" in closed.label, "CLOSED carries no check mark"
     assert len(STATUS_STYLES) == len(ExceptionStatus) == 6, len(STATUS_STYLES)
     print(f"\n  CONFIRMED {confirmed.label!r} vs CLOSED {closed.label!r}, distinct colours")
+
+
+# ===========================================================================
+# The style map, checked as a WHOLE rather than one hand-picked pair at a time
+#
+# Found by review on 2026-08-28, already shipped: PENDING_EVIDENCE and
+# PENDING_AI_UNAVAILABLE carried byte-identical StatusStyles - #0969da on
+# #ddf4ff, the same in both colour fields. A model outage rendered as a normal
+# waiting state, which is the single confusion this queue cannot afford: one
+# says wait, the other says go and find out why the model is down.
+#
+# HOW IT GOT THERE, because that is what determines the shape of the guard. The
+# M8 build prompt lists colours for five statuses and never mentions
+# PENDING_EVIDENCE, so PENDING_EVIDENCE was added by copying the line above it.
+# The existing pairwise test picked CONFIRMED and CLOSED by hand and had
+# nothing to say about any other pair, and the only breadth check was
+# `len(STATUS_STYLES) == 6` - which a copied line satisfies perfectly.
+#
+# So the guard is over EVERY pair and EVERY member, and both checks run through
+# a helper the planted controls also call. A control that exercised different
+# code from the assertion would prove the control works, not the test.
+# ===========================================================================
+
+
+def _collapsed_pairs(styles: dict[ExceptionStatus, StatusStyle]) -> list[str]:
+    """Every pair of statuses that would render alike, and in which field.
+
+    Whole-dataclass equality is the headline, but a pair sharing only `colour`
+    is already a defect on the static page, where colour is the only signal a
+    pill carries beyond its text. Both are reported.
+    """
+    collapsed: list[str] = []
+    for left, right in itertools.combinations(sorted(styles, key=lambda s: s.value), 2):
+        one, other = styles[left], styles[right]
+        if one == other:
+            collapsed.append(f"{left.value} and {right.value} are IDENTICAL in every field")
+            continue
+        shared = [
+            field
+            for field in ("label", "colour", "background")
+            if getattr(one, field) == getattr(other, field)
+        ]
+        if shared:
+            collapsed.append(f"{left.value} and {right.value} share {'+'.join(shared)}")
+    return collapsed
+
+
+def _uncovered(styles: dict[ExceptionStatus, StatusStyle]) -> list[str]:
+    """Members of ExceptionStatus with no style of their own."""
+    return sorted(status.value for status in ExceptionStatus if status not in styles)
+
+
+@pytest.mark.charter_guard
+def test_no_two_statuses_render_alike() -> None:
+    """Every pair distinct in the WHOLE dataclass, not in label alone.
+
+    A future edit that adds a status by copying its neighbour's line is how
+    this happened the first time, and label-only inequality would let it happen
+    again: the label is the one field a copy always changes.
+    """
+    collapsed = _collapsed_pairs(STATUS_STYLES)
+    assert not collapsed, f"{len(collapsed)} status pair(s) render alike:\n  " + "\n  ".join(
+        collapsed
+    )
+    pairs = len(STATUS_STYLES) * (len(STATUS_STYLES) - 1) // 2
+    waiting = (
+        STATUS_STYLES[ExceptionStatus.PENDING_EVIDENCE],
+        STATUS_STYLES[ExceptionStatus.PENDING_AI_UNAVAILABLE],
+    )
+    print(
+        f"\n  {pairs} pairs checked across {len(STATUS_STYLES)} statuses, none alike"
+        f"\n  the two waiting states: {waiting[0].colour} vs {waiting[1].colour}"
+    )
+
+
+@pytest.mark.charter_guard
+def test_every_status_has_a_style_of_its_own() -> None:
+    """Coverage by MEMBERSHIP, not by count.
+
+    `len(STATUS_STYLES) == 6` was already asserted in two files and neither
+    noticed the collapse, because a status that inherits a neighbour's styling
+    by omission still occupies a key. A status added to the enum later must
+    fail here rather than quietly render as whatever it was copied from.
+    """
+    uncovered = _uncovered(STATUS_STYLES)
+    assert not uncovered, f"ExceptionStatus member(s) with no style: {uncovered}"
+    assert set(STATUS_STYLES) == set(ExceptionStatus)
+    print(f"\n  all {len(ExceptionStatus)} ExceptionStatus members styled")
+
+
+@pytest.mark.charter_guard
+def test_the_style_checks_fire_on_a_planted_collapse() -> None:
+    """POSITIVE CONTROLS, through the same helpers the real assertions use.
+
+    Three plants, because the defect has three shapes and the middle one is the
+    one that actually shipped - two statuses differing in label and matching in
+    both colour fields, which reads as distinct in the Streamlit table and
+    identical on the static page.
+    """
+    ai = ExceptionStatus.PENDING_AI_UNAVAILABLE
+    evidence = ExceptionStatus.PENDING_EVIDENCE
+
+    identical = dict(STATUS_STYLES)
+    identical[ai] = STATUS_STYLES[evidence]
+    found = _collapsed_pairs(identical)
+    assert any("IDENTICAL in every field" in entry for entry in found), found
+
+    # The shipped defect, reconstructed: distinct labels, same colours.
+    shipped = dict(STATUS_STYLES)
+    shipped[evidence] = StatusStyle("PENDING_EVIDENCE", "#0969da", "#ddf4ff")
+    found = _collapsed_pairs(shipped)
+    assert any("colour+background" in entry for entry in found), (
+        f"the guard would not have caught the defect it was written for: {found}"
+    )
+
+    dropped = {status: style for status, style in STATUS_STYLES.items() if status is not ai}
+    assert _uncovered(dropped) == ["PENDING_AI_UNAVAILABLE"], _uncovered(dropped)
+
+    print("\n  3 plants: identical styles, colour-only collapse (the shipped one), missing member")
 
 
 def test_verified_by_reads_the_resolver_not_the_status() -> None:

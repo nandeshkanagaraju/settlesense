@@ -70,7 +70,19 @@ STATUS_STYLES: dict[ExceptionStatus, StatusStyle] = {
     ExceptionStatus.CLOSED: StatusStyle("CLOSED ✓", "#0a4d20", "#b7f0c6"),
     ExceptionStatus.ABSTAINED: StatusStyle("ABSTAINED", "#9a6700", "#fff8c5"),
     ExceptionStatus.OPEN: StatusStyle("OPEN", "#57606a", "#eaeef2"),
-    ExceptionStatus.PENDING_EVIDENCE: StatusStyle("PENDING_EVIDENCE", "#0969da", "#ddf4ff"),
+    # THE TWO WAITING STATES MUST NOT LOOK ALIKE, and until 2026-08-28 they did:
+    # both were #0969da on #ddf4ff, identical in every field. One is data that
+    # has not arrived yet; the other is the model being DOWN. Rendering a
+    # service failure as a normal waiting state is the one confusion a queue of
+    # unresolved items cannot afford, because the operator's response differs -
+    # wait, versus go and look at why.
+    #
+    # PENDING_EVIDENCE MOVED, NOT PENDING_AI_UNAVAILABLE. The M8 build prompt
+    # names five statuses and assigns "PENDING_AI_UNAVAILABLE blue"; it says
+    # nothing about PENDING_EVIDENCE, which is how PENDING_EVIDENCE came to
+    # borrow its neighbour's line in the first place. So the borrower moves and
+    # the status the spec actually assigned a colour keeps it.
+    ExceptionStatus.PENDING_EVIDENCE: StatusStyle("PENDING_EVIDENCE", "#8250df", "#fbefff"),
     ExceptionStatus.PENDING_AI_UNAVAILABLE: StatusStyle(
         "PENDING_AI_UNAVAILABLE", "#0969da", "#ddf4ff"
     ),
