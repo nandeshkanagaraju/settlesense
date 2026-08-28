@@ -281,16 +281,25 @@ def render_page(
     config: AppConfig,
     as_of: date,
     day: int | None = None,
-    limit: int = 40,
+    limit: int | None = None,
 ) -> str:
     """The whole page. `limit` bounds the rows RENDERED and says so on the page.
 
     A silently truncated table reads as a complete one, which is the same
     defect class as a count derived by subtraction.
+
+    NO LIMIT BY DEFAULT, and it used to be 40. The AI layer resolves the two
+    largest duplicate pairs it can prove, and those rank 58 and 59 by amount -
+    so a 40-row table stated "2 AI_VERIFIED" in its caption and showed none of
+    them. The fix is to render everything, NOT to crop to the interesting rows:
+    a crop is a selection, and selecting the rows that flatter the result is
+    the one move this project has consistently refused. `scope_notice` reads
+    the realised counts either way, so the caption stays true whatever a caller
+    passes.
     """
     resolved = current_categories(dataset, config, as_of)
     rows = build_rows(store, day, resolved)
-    shown = rows[:limit]
+    shown = rows if limit is None else rows[:limit]
     summaries = population_summaries(store, dataset, config, as_of)
     days = arrival_days(store)
     evidence = evidence_index(store, dataset, config)

@@ -647,11 +647,13 @@ def scope_notice(shown: int, total: int) -> str:
     """What the reader is looking at: all of it, or the top N of it.
 
     ONE SENTENCE, BOTH VIEWS, AND IT MUST BE TRUE OF THE VIEW THAT SHOWS IT.
-    The static page renders the 40 largest; Streamlit scrolls all 339. Copying
-    the page's number into the app would be a false statement about the app,
-    and in a view whose purpose is an honest exception list that is the wrong
-    kind of ambiguity - a reviewer scrolling a table cannot otherwise tell
-    whether they are seeing everything or a filtered subset.
+    Both now render every row, so both say so - but the sentence is computed
+    from the realised `shown` and `total` rather than written, because the
+    static page DID render only the 40 largest until the AI layer resolved two
+    rows that rank 58 and 59. A hardcoded sentence would have gone on saying
+    40 after the limit was lifted, and in a view whose purpose is an honest
+    exception list a reviewer cannot otherwise tell whether they are seeing
+    everything or a filtered subset.
     """
     if shown >= total:
         return (

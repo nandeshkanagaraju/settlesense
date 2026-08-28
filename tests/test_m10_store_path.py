@@ -227,6 +227,26 @@ def test_the_store_path_confirms_something_and_false_confirms_zero(
 
     gave = sum(1 for entry in per_pair if entry["model_gave_a_hypothesis"])
     correct = sum(1 for entry in per_pair if entry["nominated_correctly"])
+
+    # THE HEADLINE SENTENCE, AND ITS NUMBERS, ASSERTED AGAINST THE RUN. It is a
+    # published claim now, so it must not drift from the figures it describes -
+    # a README saying 14 of 22 after a run produced 11 would be a false
+    # statement with a passing suite behind it.
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    claim = (
+        "The model named the truth-correct order in 14 of 22 store-path pairs. The\n"
+        "verifier confirmed one. The other 13 correct nominations were rejected because\n"
+        "the evidence could not carry the claim. Being right is not the same as being\n"
+        "provable \u2014 a system that confirmed every correct guess would also confirm the\n"
+        "wrong ones it could not tell apart."
+    )
+    assert claim in readme, "the README's store-path claim is missing or reworded"
+    assert f"{correct} of {len(per_pair)} store-path pairs" in readme, (
+        f"the README says something other than the realised {correct} of {len(per_pair)}"
+    )
+    assert len(confirmed) == 1, "the README says 'confirmed one'"
+    assert correct - len(confirmed) == 13, "the README says 13 correct nominations rejected"
+
     print(
         f"\n  {result['pairs_replayed']} pairs: {result['pairs_confirmed']} confirmed, "
         f"{result['pairs_abstained']} abstained, {result['false_confirms']} false confirms\n"

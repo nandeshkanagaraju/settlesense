@@ -19,6 +19,7 @@ no reconciliation logic, no verification, and no model client.
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,24 @@ from settlesense.ui.queue import (
     scope_notice,
 )
 
-DB_PATH = Path("reports/ui/state.db")
+# Which store to render. Overridable because there are now TWO demo stores:
+# `streamlit run` takes no arguments of its own, so the outage store built by
+# `make ui-outage` had no way to reach this view - and the whole point of that
+# store is that both waiting states are visible AT ONCE, which is a claim about
+# what a reviewer sees rather than about what a test asserts. An environment
+# variable is the only lever Streamlit leaves.
+#
+# READ-ONLY EITHER WAY. `open_store` refuses a database that does not exist
+# rather than rendering an empty queue, so a typo fails loudly instead of
+# producing a convincing screenshot of nothing.
+#
+# A COMMENT, NOT AN ATTRIBUTE DOCSTRING, and the difference is visible to a
+# user. Streamlit's "magic" renders every bare expression at module level -
+# including a string literal sitting under an assignment - so the docstring
+# this started as was printed across the top of the app. Caught by looking at
+# the screenshot, which is the only place it could have been caught.
+DB_PATH = Path(os.environ.get("SETTLESENSE_DB", "reports/ui/state.db"))
+
 DATA_PATH = Path("data/dev")
 CONFIG_PATH = Path("config")
 AS_OF = date(2026, 11, 30)

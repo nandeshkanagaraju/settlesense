@@ -585,7 +585,22 @@ def test_the_committed_page_and_screenshots_exist() -> None:
     page = REPO / "reports" / "ui" / "queue.html"
     assert page.exists(), "reports/ui/queue.html is not committed"
     assert page.stat().st_size > 20_000, page.stat().st_size
-    for shot in ("evidence-queue.png", "evidence-panel.png"):
+    outage = REPO / "reports" / "ui" / "queue-outage.html"
+    assert outage.exists(), "reports/ui/queue-outage.html is not committed"
+    assert outage.stat().st_size > 20_000, outage.stat().st_size
+
+    for shot in (
+        "evidence-queue.png",
+        "evidence-panel.png",
+        # M10. The two waiting states side by side, and the AI_VERIFIED rows -
+        # both are claims about what a reviewer SEES, and an assertion that two
+        # hex strings differ is not the same evidence as a picture of them
+        # differing.
+        "queue-outage.png",
+        "streamlit-outage.png",
+        "queue-ai-verified.png",
+        "streamlit-queue.png",
+    ):
         # In reports/ui/, not docs/: they are GENERATED artifacts and belong
         # beside the page they were captured from. A new top-level directory
         # would also need declaring in SDD section 2, and a screenshot folder
@@ -917,3 +932,52 @@ def test_23_both_views_render_hypotheses_from_the_shared_panel() -> None:
     assert "panel.checks_run" in app, "the app does not render the checks that ran"
     assert "hypothesis.failure_reason" in app, "the app does not show why one was rejected"
     print("\n  both views render sections 2 and 3 from EvidencePanel")
+
+
+@pytest.mark.charter_guard
+def test_no_bare_string_expression_survives_at_module_level_in_the_app() -> None:
+    """Streamlit's MAGIC renders bare expressions. A docstring is one of them.
+
+    An attribute docstring - a string literal sitting under an assignment - is
+    invisible everywhere in this project except here, where `streamlit run`
+    prints it across the top of the page. It happened: the `DB_PATH` override
+    added for the outage demo carried one, and three paragraphs of implementation
+    notes appeared above the title.
+
+    Caught by LOOKING AT THE SCREENSHOT, which is the only place it could have
+    been caught - every test passed, mypy passed, ruff passed. So the guard is
+    written here, because the next person to document a constant in this file
+    will reach for the same convention that is correct in all thirty other
+    modules.
+
+    The module docstring itself is exempt: it is the one bare string Python
+    consumes rather than evaluating as an expression statement.
+    """
+    tree = ast.parse((UI_DIR / "app.py").read_text(encoding="utf-8"))
+    offenders = [
+        f"app.py:{node.lineno}: {node.value.value[:60]!r}"
+        for index, node in enumerate(tree.body)
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+        and index != 0  # the module docstring
+    ]
+    assert not offenders, (
+        "Streamlit renders these onto the page:\n  "
+        + "\n  ".join(offenders)
+        + "\nUse a # comment instead."
+    )
+
+    # FAULT INJECTION: the scan must find one when there is one to find.
+    planted = ast.parse('X = 1\n"""an attribute docstring"""\n')
+    assert any(
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+        for index, node in enumerate(planted.body)
+        if index != 0
+    ), "the scan cannot see an attribute docstring at all"
+    print(
+        f"\n  {len(tree.body)} module-level statements in app.py, "
+        "0 bare strings after the docstring"
+    )

@@ -61,3 +61,13 @@ ui/*
 !ui/evidence-queue.png
 !ui/streamlit-queue.png
 !ui/evidence-panel.png
+# The OUTAGE page and its screenshots. Committed because the two waiting
+# states being visibly different is a claim about what a reviewer SEES, and
+# an assertion that two hex strings differ is not the same evidence. The
+# store behind them (outage.db) stays out, like state.db.
+!ui/queue-outage.html
+!ui/queue-outage.png
+!ui/streamlit-outage.png
+# The AI_VERIFIED rows, which sit at ranks 58-59 and are the reason the page
+# stopped truncating at 40.
+!ui/queue-ai-verified.png

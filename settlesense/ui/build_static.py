@@ -29,7 +29,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=Path("reports/ui/queue.html"))
     parser.add_argument("--as-of", type=date.fromisoformat, default=DEFAULT_AS_OF)
     parser.add_argument("--day", type=int, default=None)
-    parser.add_argument("--limit", type=int, default=40)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="render only the N largest. Default is EVERY row: a table that "
+        "showed the top 40 reported 2 AI_VERIFIED in its caption and displayed "
+        "neither of them, because both rank below 40 by amount.",
+    )
     args = parser.parse_args(argv)
 
     config = load_config(args.config)

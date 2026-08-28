@@ -109,6 +109,31 @@ the residual chart pinned at a zero y-axis and labelled with real arrival days:
 
 ![Streamlit view](reports/ui/streamlit-queue.png)
 
+The two rows the AI layer resolved sit at ranks 58 and 59 by amount. The page
+renders **all 339 rows** rather than the 40 largest — a table that reported
+`2 AI_VERIFIED` in its caption and displayed neither of them was stating a fact
+the reader could not check, and cropping to the interesting rows would have
+been a selection:
+
+![AI_VERIFIED rows in the queue](reports/ui/queue-ai-verified.png)
+
+### The two waiting states, side by side (`make ui-outage`)
+
+`PENDING_EVIDENCE` means a file has not arrived. `PENDING_AI_UNAVAILABLE` means
+the model is down. They call for opposite responses — wait, or go and find out
+why — and until 2026-08-28 they rendered in **identical colours**, so an outage
+looked like a normal queue. Day 12 is the one point in this run where both are
+alive at once; by day 24 every waiting credit has arrived.
+
+![Both waiting states](reports/ui/queue-outage.png)
+
+Six purple `PENDING_EVIDENCE`, three green `CONFIRMED`, and the blue
+`PENDING_AI_UNAVAILABLE` rows below them — 285 of 312 after the simulated
+outage. The Streamlit table draws to a canvas and carries no colour, so there
+the distinction rests on the labels, which also differ:
+
+![Streamlit, outage](reports/ui/streamlit-outage.png)
+
 **Both views are proved to agree, not asserted to.** `tests/test_view_parity.py`
 extracts every displayed value from each renderer — all 339 rows × 10 columns,
 plus each panel's ranked hypotheses, named checks, abstention reason and
@@ -313,6 +338,12 @@ row count it was divided by.
 The first is *the measurement*; the second is *the wiring proof*. They are
 different paths over the same duplicates and both stand as recorded.
 [`reports/ai/store_path.json`](reports/ai/store_path.json) (`make ai-store`).
+
+The model named the truth-correct order in 14 of 22 store-path pairs. The
+verifier confirmed one. The other 13 correct nominations were rejected because
+the evidence could not carry the claim. Being right is not the same as being
+provable — a system that confirmed every correct guess would also confirm the
+wrong ones it could not tell apart.
 
 **Why the second one exists.** `--simulate-outage` exposed that the AI layer had
 never run against the exception store: M7 was measured over dataset-derived
