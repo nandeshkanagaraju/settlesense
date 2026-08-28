@@ -55,6 +55,7 @@ REGISTERED_READERS = frozenset(
         "settlesense/export/tally.py",
         "eval/run_export.py",
         "settlesense/ui/build_state.py",
+        "eval/screenshots.py",
     }
 )
 """Every module allowed to read a file, each with a contract test below.
@@ -525,6 +526,40 @@ def _probe_empty(tmp: Path) -> str:
     return "fixture dir present and empty: nothing recorded yet"
 
 
+def _screenshot_missing(tmp: Path) -> str:
+    """No rendered page at all. The build never ran.
+
+    The tool SKIPS the shot and says which target produces the file, rather
+    than writing a blank PNG over a committed screenshot. A screenshot tool
+    that succeeds when its input is absent is how a stale image survives.
+    """
+    from eval import screenshots
+
+    code = screenshots.main(["--out", str(tmp / "out"), "--only", "no-such-shot"])
+    assert code == 2, code
+    missing = tmp / "queue.html"
+    assert not missing.exists()
+    return "page missing: nothing rendered, run `make ui-static`"
+
+
+def _screenshot_empty(tmp: Path) -> str:
+    """A page that EXISTS and holds no queue.
+
+    Legitimate output from a build that ran and produced nothing, and a
+    different fault from an absent file - fix the build, versus run it. It is
+    refused rather than cropped, because a screenshot of a blank page written
+    over a real one would look like a successful regeneration.
+    """
+    from eval.screenshots import PageHasNoTable, crop_ai_verified
+
+    blank = tmp / "queue.html"
+    blank.write_text("<html><body></body></html>", encoding="utf-8")
+    with pytest.raises(PageHasNoTable) as caught:
+        crop_ai_verified(blank.read_text(encoding="utf-8"))
+    assert "no <tbody>" in str(caught.value)
+    return "page empty: rendered but holds no queue table"
+
+
 CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "settlesense/ingest.py": (_ingest_missing, lambda _tmp: _ingest_empty()),
     "settlesense/config.py": (_config_missing, _config_empty),
@@ -538,6 +573,7 @@ CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "settlesense/export/tally.py": (_schema_missing, _schema_empty),
     "eval/run_export.py": (_results_missing, _results_empty),
     "settlesense/ui/build_state.py": (_probe_missing, _probe_empty),
+    "eval/screenshots.py": (_screenshot_missing, _screenshot_empty),
 }
 
 

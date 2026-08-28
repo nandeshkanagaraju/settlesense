@@ -316,10 +316,32 @@ def test_the_suite_budget_claim_matches_the_configured_budget() -> None:
     assert limit is not None, "the budget module no longer exposes a limit"
     flat = prose()
     assert f"{int(limit)}s budget" in flat, f"the configured budget is {limit}s"
-    assert re.search(r"\*\*\d+\.\d+s against SDD 7's", flat), (
-        "the realised figure is missing; it is a measurement, not a rounding"
+
+    # THE REALISED DURATION IS NO LONGER REQUIRED IN THE PROSE, and that is a
+    # deliberate reversal of what this test used to assert.
+    #
+    # It demanded `**103.2s against SDD 7's ...**` - a realised measurement
+    # rather than a rounding, which was the right instinct about roundings and
+    # the wrong conclusion. No committed file holds a suite duration, so the
+    # assertion mandated a figure a reader could not check, and the figure had
+    # already drifted: the prose said 103.2s while a clean-room run measured
+    # 98.2s. That is the Rs2.49 shape - a number that reads as a measurement,
+    # cannot be traced, and stops being true quietly.
+    #
+    # So the BUDGET is asserted, because tests/budget.py holds it, and the
+    # realised duration is printed by every run instead. What this now checks
+    # is that the section says so, rather than quoting a number.
+    assert re.search(r"printed by every run", flat), (
+        "LIMITATIONS no longer says the realised duration is printed per run. "
+        "Either say it, or quote a figure that a committed artifact contains - "
+        "not one that only ever existed in prose."
     )
-    print(f"\n  budget {int(limit)}s, quoted from tests/budget.py")
+    assert not re.search(r"\*\*\d+\.\d+s against SDD 7's", flat), (
+        "a realised suite duration is quoted again. No artifact holds one, so "
+        "it cannot be checked and will drift; tests/test_published_figures.py "
+        "would reject it as untraceable."
+    )
+    print(f"\n  budget {int(limit)}s, quoted from tests/budget.py; realised figure printed per run")
 
 
 @pytest.mark.charter_guard

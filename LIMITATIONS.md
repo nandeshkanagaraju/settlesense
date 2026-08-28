@@ -568,11 +568,11 @@ macOS-26.6-arm64-arm-64bit-Mach-O`, stated in `reports/bench.md`'s header and
 quoted into the README verbatim rather than retyped. Median of three, never the
 best run. Nothing here establishes behaviour on a different CPU, a different
 Python, or under contention. The same caveat applies to the suite itself: SDD
-7's budget is **120s of wall clock**, so it is a property of the machine as
-much as of the code, and a slower one may breach it. The realised duration is
-printed by every run rather than quoted here — it differs run to run, no
-committed file holds it, and the figure that used to sit in this sentence had
-already drifted from what the suite actually measured.
+7's **120s budget** is a wall-clock assertion, so it is a property of the
+machine as much as of the code, and a slower one may breach it. The realised
+duration is printed by every run rather than quoted here — it differs run to
+run, no committed file holds it, and the figure that used to sit in this
+sentence had already drifted from what the suite actually measured.
 
 **Cross-platform reproducibility was never run.** The determinism claims are
 verified by re-running on one machine, not by two machines agreeing.

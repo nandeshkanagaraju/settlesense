@@ -8,7 +8,7 @@
     "tests/test_determinism_guard.py": 17,
     "tests/test_env_integrity.py": 81,
     "tests/test_eval_set.py": 49,
-    "tests/test_file_reading_contract.py": 20,
+    "tests/test_file_reading_contract.py": 21,
     "tests/test_gen_ids.py": 9,
     "tests/test_generator_freeze.py": 9,
     "tests/test_ingest.py": 25,
@@ -44,5 +44,5 @@
     "tests/test_verbosity_honoured.py": 8,
     "tests/test_view_parity.py": 9
   },
-  "total": 1124
+  "total": 1125
 }

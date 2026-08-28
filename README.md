@@ -484,10 +484,36 @@ make eval-set      # regenerate the AI evaluation set (seeds 1000-1019)
 make bench         # throughput scaling table -> reports/bench.md
 make test          # no network, deterministic, under 120 seconds
 make check         # ruff + mypy + determinism guard tests
+make screenshots   # regenerate the committed PNGs (needs Chrome)
 ```
 
 Targets that have no implementation yet refuse and exit non-zero. They never
 pass silently.
+
+### The screenshots, and which two are manual
+
+`make screenshots` regenerates four of the six PNGs under `reports/ui/` from
+the committed HTML that `make ui-static` and `make ui-outage` produce. It needs
+Chrome or Chromium and refuses with exit 3 if it cannot find one.
+
+**The method is reproducible; the bytes are not, and are not claimed to be.**
+Chrome's version, the installed fonts and the display scale all move them, in
+the same way durations move `bench.md`. Regenerate and *look* — nothing hashes
+these. Before this target existed there was no procedure at all, so "does this
+screenshot still match what the code renders?" could only be answered by
+trusting the image.
+
+Two of the six — `streamlit-queue.png` and `streamlit-outage.png` — are
+**taken by hand and cannot currently be automated.** The Streamlit app renders
+client-side, and headless Chrome captures its grey skeleton placeholders: a 4s
+settle, a 25s settle and disabling XSRF and CORS all produced a 29KB image of a
+loading state. Writing that over a real screenshot would have looked like a
+successful run, so the target does not touch them. To retake them:
+
+```
+make demo-state && make ui     # then screenshot localhost:8501
+make ui-outage                 # SETTLESENSE_DB=reports/ui/outage.db make ui
+```
 
 ## Generator independence
 

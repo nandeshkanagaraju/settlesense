@@ -26,7 +26,7 @@ define notimpl
 	@exit 1
 endef
 
-.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop record-fixtures demo-state ui ui-static ui-outage ai-store export check golden-accept bench config-check fault-report collection-baseline eval-holdout
+.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop record-fixtures demo-state ui ui-static ui-outage ai-store export check golden-accept bench config-check fault-report collection-baseline eval-holdout screenshots
 
 help:
 	@echo "SettleSense targets:"
@@ -49,6 +49,7 @@ help:
 	@echo "  ui-static     evidence queue as one HTML file (read-only)"
 	@echo "  export        CONFIRMED -> Tally-compatible XML, dry run (M9)"
 	@echo "  ui-outage     the queue with a simulated model outage (M10)"
+	@echo "  screenshots   regenerate the committed PNGs (needs Chrome)"
 	@echo "  ai-store      replay the AI layer over the persisted store (no spend)"
 	@echo "  golden-accept regenerate golden files (deliberately awkward)"
 
@@ -238,6 +239,28 @@ ui-outage:
 	  --days 1,12 --simulate-outage
 	$(PYTHON) -m settlesense.ui.build_static --db reports/ui/outage.db \
 	  --out reports/ui/queue-outage.html
+
+# The six PNGs the README links. There was no target and no written procedure
+# for these, so "does this screenshot still match what the code renders?" could
+# only be answered by trusting the image - the same objection this project
+# makes to a figure with no artifact behind it.
+#
+# The METHOD is reproducible; the BYTES are not, and are not claimed to be.
+# Chrome's version, the installed fonts and the display scale all move them,
+# exactly as durations move bench.md. Regenerate and LOOK; nothing hashes these.
+#
+# Needs Chrome or Chromium and refuses (exit 3) if it cannot find one. The four
+# it takes come from the committed HTML, which `make ui-static` and
+# `make ui-outage` produce byte-identically, so what is captured is fixed by
+# the pipeline rather than by whatever was on screen.
+#
+# streamlit-queue.png and streamlit-outage.png are NOT here. They render
+# client-side and headless Chrome captures the grey skeleton - see
+# eval/screenshots.py for what was tried. They stay manual, and the README
+# says so, because a target that silently wrote a loading state over a real
+# screenshot would be worse than no target.
+screenshots: ui-static
+	$(PYTHON) -m eval.screenshots --out reports/ui $(ARGS)
 
 # --- export -----------------------------------------------------------------
 
