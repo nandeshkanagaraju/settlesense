@@ -341,6 +341,108 @@ them, only that this generator cannot produce the case that would test it.
 
 ## Baselines
 
+**The strong LLM-only baseline is implemented but was not run against recorded
+model responses. No comparison figure is published for it, and none should be
+inferred.** `reports/eval/results.json` and `reports/eval-holdout/results.json`
+both record it as `"skipped": true` on every run this project has made.
+
+That is stated in the present tense on purpose. The module is 300 lines of
+careful work — candidate retrieval, chunking, a schema, a prompt written in
+good faith — and describing what it *would* show is exactly how an unrun thing
+comes to be read as a result. This project has already been caught by that
+once: the AI layer had never run against the exception store, and it took
+`--simulate-outage` probing it by accident to notice.
+
+**What HAS been exercised, precisely.** `test_12_llm_only_runs_against_the_replay_client_with_no_network`
+runs the baseline end to end over all 39 batches — 4 prompts, 39 links, 0 parse
+failures — but the responses it replays are **synthesised by the test from the
+retrieval ranking**, not recorded from a model: the fixture answers
+`select_candidates(row, batches)[0]`. So the plumbing is proven — prompts build,
+chunk boundaries hold, JSON parses, no socket opens — and **nothing whatsoever
+is established about how a model would perform.** `retrieval_recall` is
+implemented and wired into the result type; it has never been computed, because
+computing it needs a run with truth links and there has been no run.
+
+### What each baseline is
+
+| Baseline | What it uses |
+|---|---|
+| `naive` | Amount + a **5-day** date window. No identifiers of any kind. |
+| `deterministic_only` | The full rules layer, P1–P9, including fuzzy UTR. No model. |
+| `settlesense` | The shipped engine. Identical to `deterministic_only` today. |
+| `llm_only` | Same normalized records, top-20 candidate retrieval, structured JSON, domain rules in the prompt. **Not run.** |
+
+The naive window is **wider than the engine's 3 days**, deliberately: the
+baseline exists to show what accepting weaker evidence does, and tightening it
+to flatter the comparison would defeat the point.
+
+### The realised numbers, and no ranking claimed
+
+| | Dev (seed 42) | Holdout (seed 999) |
+|---|---|---|
+| `naive` linked | 32 / 39 | 33 / 39 |
+| `naive` false links | **0** | **0** |
+| `deterministic_only` linked | 37 / 39 | 38 / 39 |
+| `deterministic_only` false links | **0** | **0** |
+| `settlesense` linked | 37 / 39 | 38 / 39 |
+| `llm_only` | **not run** | **not run** |
+
+**The expected shape of this comparison did not happen, and that is the
+finding.** The premise was that naive would link *more* by pairing on
+amount-plus-date alone, and link them *less precisely*. It did neither: it
+linked **fewer**, and its false-link count is **zero on both sets** — identical
+precision to the full rules layer.
+
+The reason is measured and sits in the same artifact:
+`batch_amount_uniqueness` is **1.000000**. Every batch amount in this dataset is
+unique, so amount-plus-date cannot produce a collision and therefore cannot
+produce a false link. Naive links fewer only because some credits fall outside
+its window or never arrived. **This is the batch-density limitation restated as
+a baseline result**: the naive baseline looks precise here because the dataset
+cannot punish it, and a merchant with recurring price points would punish it
+immediately.
+
+### What was done to make the LLM-only baseline strong, and what was not
+
+Done: the same M2-normalized typed records rather than raw CSV, so the model is
+not handed a parsing problem; deterministic top-20 candidate retrieval rather
+than the whole table, so the baseline does not depend on 39 batches fitting in a
+prompt; a JSON schema stated in the prompt with a required `confidence` and
+`reasoning` per row; deterministic chunking that never splits a bank row from
+its candidates; the domain rules stated outright — what a UTR is, that a batch
+total is a signed line sum, that sub-rupee rounding exists, that a missing
+credit is legitimate; and permission to abstain, scored on the same
+accept/abstain axis as the engine.
+
+Not done: **no few-shot examples**, no worked demonstrations, no
+chain-of-thought instruction beyond the one-sentence `reasoning` field, no
+retrieval tuning, no prompt iteration against results, no model comparison, and
+no temperature or sampling exploration. A reader deciding whether the comparison
+would have been fair should weigh all of that — and then note that it does not
+matter yet, because the baseline was never run.
+
+### The ceiling this comparison has, even if it is run
+
+A fairly-tuned LLM-only matcher would be competing against rules on a task that
+is **mostly arithmetic and identifier joins** — fee recomputation, UTR equality,
+date windows, signed line sums. Losing there would say very little about a
+model's value on genuinely interpretive work, and winning would be surprising
+rather than informative.
+
+This project's own evidence points the other way on the interpretive part: on
+the store path the model nominated the **truth-correct order in 14 of 22
+pairs**. The verifier confirmed one, because being right is not the same as
+being provable — but a model that names the right row 14 times out of 22 on a
+deliberately ambiguous task is not a model that is bad at interpretation. The
+architecture's claim is about *where* to spend a model, not about models being
+weak.
+
+### Which baselines were run on the holdout
+
+`naive`, `deterministic_only` and `settlesense` all ran on both the dev set and
+the held-out set, in the single seed-999 run, and both columns above are read
+from the committed artifacts. `llm_only` ran on **neither**.
+
 ## Thresholds
 
 The safety budgets in `config/thresholds.yaml` — residual false-match rate,

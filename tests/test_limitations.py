@@ -347,3 +347,180 @@ def test_the_section_makes_the_claims_it_was_asked_to_make() -> None:
     missing = sorted(topic for topic, phrase in required.items() if phrase not in flat)
     assert not missing, f"the section no longer covers: {missing}"
     print(f"\n  all {len(required)} topics present")
+
+
+# ===========================================================================
+# The Baselines section — and the one baseline that has never run
+# ===========================================================================
+
+BASELINES_HEADING = "## Baselines"
+
+
+def baselines_section() -> str:
+    text = LIMITATIONS.read_text(encoding="utf-8")
+    assert BASELINES_HEADING in text, "the Baselines heading is gone"
+    return text.split(BASELINES_HEADING, 1)[1].split("\n## ", 1)[0]
+
+
+def baselines_prose() -> str:
+    return re.sub(r"\s+", " ", baselines_section())
+
+
+def test_the_baselines_section_is_not_empty() -> None:
+    body = baselines_section().strip()
+    assert len(body) > 2_000, f"only {len(body)} characters; the heading is still a promise"
+    print(f"\n  {len(body):,} characters")
+
+
+@pytest.mark.charter_guard
+def test_the_llm_baseline_is_recorded_as_not_run_because_it_was_not_run() -> None:
+    """THE CLAIM THIS SECTION TURNS ON, asserted from both artifacts.
+
+    An unrun baseline described as though it ran is the same defect class as
+    the store-path gap, and that one survived until `--simulate-outage` probed
+    it by accident. So the artifact is the authority: if `skipped` ever goes
+    false, this test fails and the prose has to be rewritten rather than
+    quietly becoming true.
+    """
+    flat = baselines_prose()
+    for name in ("eval", "eval-holdout"):
+        entry = results(name)["baselines"]["llm_only"]
+        assert entry.get("skipped") is True, f"{name} now has a real llm_only result"
+        assert "batches_linked" not in entry, f"{name} llm_only reports a link count"
+
+    assert "implemented but was not run against recorded model responses" in flat, (
+        "the section does not say plainly that it was not run"
+    )
+    assert "No comparison figure is published for it" in flat
+    assert "`llm_only` ran on **neither**" in flat, "the holdout status is not stated"
+
+    # PRESENT TENSE, not conditional. "would show" is how an unrun thing
+    # becomes a result in a reader's memory.
+    for hedge in ("the baseline shows", "the baseline demonstrates", "outperforms"):
+        assert hedge not in flat.lower(), f"the section claims a result: {hedge!r}"
+    print("\n  llm_only skipped=True in both artifacts; the section says so in present tense")
+
+
+def test_the_llm_baseline_test_replays_synthesised_answers_not_model_output() -> None:
+    """The distinction the section rests on, checked in the test's own source.
+
+    `test_12` proves the plumbing and nothing about a model, because it builds
+    its own fixture answers from the retrieval ranking. If that ever changed to
+    real recordings the claim here would be understating the work.
+    """
+    source = (REPO / "tests" / "test_m5_eval.py").read_text(encoding="utf-8")
+    body = source.split("def test_12_llm_only_runs_against_the_replay_client", 1)[1]
+    body = body.split("\ndef ", 1)[0]
+    assert "select_candidates(row, batches)[0].batch_id" in body, (
+        "test_12 no longer synthesises its answers from retrieval; if it now "
+        "replays recorded model output, LIMITATIONS understates what was run"
+    )
+    assert "synthesised by the test from the retrieval ranking" in baselines_prose()
+    print("\n  test_12's fixtures are built from select_candidates, not from a model")
+
+
+def test_the_baseline_link_counts_match_both_artifacts() -> None:
+    """Every cell of the results table, from the committed runs."""
+    flat = baselines_prose()
+    for name, label in (("eval", "dev"), ("eval-holdout", "holdout")):
+        payload = results(name)["baselines"]
+        for baseline in ("naive", "deterministic_only", "settlesense"):
+            entry = payload[baseline]
+            linked = entry["batches_linked"]
+            total = payload["deterministic_only"]["batch_count"]
+            assert f"{linked} / {total}" in flat, f"{label} {baseline} linked {linked} of {total}"
+            assert entry["false_links"] == 0, (label, baseline, entry["false_links"])
+    print("\n  naive 32/33, deterministic 37/38, settlesense 37/38, all zero false links")
+
+
+@pytest.mark.charter_guard
+def test_the_surprising_ordering_is_reported_as_a_finding_not_smoothed_over() -> None:
+    """Naive linked FEWER and was EQUALLY precise. Both halves contradicted.
+
+    The premise was that a weaker baseline would link more and link worse. It
+    did neither, and the cause is measured rather than guessed: every batch
+    amount in this dataset is unique, so amount-plus-date cannot collide. That
+    makes the naive result a restatement of the batch-density limitation, and
+    the section has to say so rather than presenting it as a clean win.
+    """
+    dev = results("eval")["baselines"]
+    holdout = results("eval-holdout")["baselines"]
+    flat = baselines_prose()
+
+    for payload in (dev, holdout):
+        assert payload["naive"]["batches_linked"] < payload["deterministic_only"]["batches_linked"]
+        assert payload["naive"]["false_links"] == payload["deterministic_only"]["false_links"] == 0
+
+    uniqueness = dev["naive"]["batch_amount_uniqueness"]
+    assert Decimal(uniqueness) == Decimal("1"), uniqueness
+    assert f"**{uniqueness}**" in flat, f"batch amount uniqueness is {uniqueness}"
+    assert "did not happen, and that is the finding" in flat
+    assert "linked **fewer**" in flat and "zero on both sets" in flat
+    assert "batch-density limitation restated as" in flat, (
+        "the naive result is not connected back to the density limitation"
+    )
+    print(
+        f"\n  naive linked fewer with equal precision; batch_amount_uniqueness "
+        f"{uniqueness} explains it"
+    )
+
+
+def test_the_windows_and_retrieval_width_are_the_configured_ones() -> None:
+    """5-day naive window, 3-day engine window, top-20 retrieval."""
+    import inspect
+
+    import yaml
+
+    from eval.baselines.llm_only import CANDIDATES_PER_ROW
+    from eval.baselines.naive import run_naive
+
+    flat = baselines_prose()
+    naive_window = inspect.signature(run_naive).parameters["window_days"].default
+    thresholds = yaml.safe_load((REPO / "config" / "thresholds.yaml").read_text(encoding="utf-8"))
+    engine_window = json.dumps(thresholds)
+
+    assert f"**{naive_window}-day** date window" in flat, f"naive uses {naive_window} days"
+    assert f'"date_window_days": {naive_window - 2}' in engine_window or "date_window_days: 3" in (
+        (REPO / "config" / "thresholds.yaml").read_text(encoding="utf-8")
+    ), "the engine window moved"
+    assert f"wider than the engine's {naive_window - 2} days" in flat
+    assert f"top-{CANDIDATES_PER_ROW} candidate retrieval" in flat, (
+        f"retrieval is top-{CANDIDATES_PER_ROW}"
+    )
+    print(f"\n  naive {naive_window}d, engine 3d, retrieval top-{CANDIDATES_PER_ROW}")
+
+
+def test_the_interpretive_counterweight_uses_the_store_path_figure() -> None:
+    """14 of 22, read from store_path.json rather than recalled."""
+    store = json.loads((REPO / "reports" / "ai" / "store_path.json").read_text(encoding="utf-8"))
+    correct = sum(1 for entry in store["per_pair"] if entry["nominated_correctly"])
+    total = store["pairs_replayed"]
+    flat = baselines_prose()
+    # Bold markers stripped as well as whitespace: where the ** falls inside a
+    # phrase is an emphasis choice, and asserting it would make the test fail on
+    # a rewording that changed nothing about the claim.
+    plain = flat.replace("**", "")
+    assert f"truth-correct order in {correct} of {total} pairs" in plain, (
+        f"the store-path counterweight is {correct} of {total}"
+    )
+    assert "not a model that is bad at interpretation" in flat
+    print(f"\n  interpretive counterweight: {correct} of {total} correct nominations")
+
+
+@pytest.mark.charter_guard
+def test_the_baselines_section_makes_the_claims_it_was_asked_to_make() -> None:
+    """Coverage by topic, so a rewrite cannot quietly drop one."""
+    flat = baselines_prose()
+    required = {
+        "not run": "was not run against recorded model responses",
+        "what each is": "No identifiers of any kind",
+        "realised numbers": "and no ranking claimed",
+        "what was done": "no few-shot examples",
+        "what was not done": "no prompt iteration against results",
+        "the ceiling": "mostly arithmetic and identifier joins",
+        "counterweight": "truth-correct order in",
+        "holdout status": "ran on **neither**",
+    }
+    missing = sorted(topic for topic, phrase in required.items() if phrase not in flat)
+    assert not missing, f"the Baselines section no longer covers: {missing}"
+    print(f"\n  all {len(required)} topics present")
