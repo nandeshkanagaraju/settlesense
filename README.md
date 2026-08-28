@@ -509,16 +509,25 @@ make screenshots   # regenerate four of the six committed PNGs (needs Chrome)
 Targets that have no implementation yet refuse and exit non-zero. They never
 pass silently.
 
-**A dirty tree after `make bench` or `make eval` is expected, and only for two
-files.** `reports/bench.md` and `reports/eval/throughput.md` are committed —
-the README quotes their throughput figures, and a quoted number with no
-artifact behind it is unfalsifiable — but they record *durations*, which differ
-on every run and every machine. So they are evidence of a real run on a stated
-machine rather than byte-stable artifacts, and `git status` will show them
-modified. Everything else regenerates byte-identically: `data/dev`,
-`data/holdout`, `reports/eval/results.json`, `reports/ui/queue.html`,
-`reports/ui/queue-outage.html`, `reports/ai/store_path.json` and the export XML
-all come back unchanged, and a diff in any of those is a real finding.
+**Everything regenerates byte-identically except two files, and those two turn
+the suite red.** `data/dev`, `data/holdout`, `reports/eval/results.json`,
+`reports/ui/queue.html`, `reports/ui/queue-outage.html`,
+`reports/ai/store_path.json`, the export XML and the four `make screenshots`
+PNGs all come back unchanged. A diff in any of them is a real finding.
+
+`reports/bench.md` and `reports/eval/throughput.md` are the exceptions. They
+are committed — the README quotes their throughput figures, and a quoted number
+with no artifact behind it is unfalsifiable — but they record *durations*,
+which differ on every run and every machine.
+
+So **`make bench` followed by `make test` fails, deliberately.**
+`tests/test_bench.py` cross-checks the throughput table above against
+`bench.md`, and rewriting one without the other is exactly the drift that check
+exists to catch. It is not a flaky test and it is not a dirty-tree warning:
+after `make bench` you either `git checkout -- reports/bench.md`, or update the
+README table in the same commit and say which machine produced it. The same
+applies to `make eval` and `throughput.md`. Nothing else in the documented
+pipeline leaves the tree modified.
 
 ### The screenshots, and which two are manual
 

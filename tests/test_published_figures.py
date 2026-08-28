@@ -158,6 +158,24 @@ def _normalise(token: str) -> str:
 
 @cache
 def _artifact_texts() -> tuple[tuple[str, str], ...]:
+    """The COMMITTED content of each artifact, not the working copy.
+
+    THE DISTINCTION IS THE WHOLE CLAIM. This module asserts that a published
+    figure traces to a committed artifact, and reading the working tree quietly
+    asserted something weaker and stranger: that it traces to whatever is on
+    disk right now.
+
+    Which broke, exactly as you would expect. `reports/bench.md` and
+    `reports/eval/throughput.md` are committed but record durations, so
+    `make bench` rewrites them - and then every throughput figure the README
+    quotes stopped tracing, because the numbers it quotes are the COMMITTED
+    ones. `make bench && make test` failed while the README said, correctly,
+    that a dirty tree after `make bench` is expected. Caught by running the
+    documented pipeline in a clean clone rather than by reading this function.
+
+    Files not yet in HEAD fall back to the working copy, so an artifact added
+    in the commit under construction still counts.
+    """
     listed = subprocess.run(
         ["git", "ls-files", "-c", "-o", "--exclude-standard"],
         cwd=REPO,
@@ -171,8 +189,14 @@ def _artifact_texts() -> tuple[tuple[str, str], ...]:
             continue
         if not name.endswith((".json", ".md", ".yaml", ".yml", ".html", ".xml", ".toml")):
             continue
+        committed = subprocess.run(
+            ["git", "show", f"HEAD:{name}"], cwd=REPO, capture_output=True, check=False
+        )
+        if committed.returncode == 0:
+            out.append((name, committed.stdout.decode("utf-8", "ignore")))
+            continue
         path = REPO / name
-        if path.is_file():
+        if path.is_file():  # staged or untracked: not in HEAD yet
             out.append((name, path.read_text(encoding="utf-8", errors="ignore")))
     return tuple(out)
 
