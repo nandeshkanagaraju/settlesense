@@ -639,6 +639,47 @@ Recorded here at submission: which Level 2 modules were built and which were
 cut, without apology. Cutting a conditional module is a planned outcome, not
 an incomplete submission.
 
+**Every Level 1 module is built.** M0 skeleton and config, M1 the adversarial
+generator, M1F its freeze, M2 normalization, M3 the deterministic engine, M4
+fuzzy UTR, M5 the evaluation harness with three baselines, M5a the throughput
+bench, M6 incremental state, M7 the verified hypothesis loop, M8 the evidence
+queue.
+
+**Level 2, in the cut order PDD §5 fixed in advance:**
+
+| # | Module | Cut order | Status |
+|---|---|---|---|
+| M11 | Read-only cash-position panel | **1st — cut first** | **Cut** |
+| M9 | Dry-run Tally-compatible XML export | 2nd | **Built** — `f3fdfcc` |
+| M10 | Model-outage degradation | 3rd | **Built** — `546a906` |
+| — | Day 3, beyond Day 1 → Day 2 | 4th | **Built** — three checkpoints |
+| — | Split-settlement subset-sum | 5th | **Not built, deliberately** |
+
+**The cut order was honoured rather than rationalised afterwards.** M11 was
+first on the list to go and it is the one that went. It is a read-only view
+over state the engine already holds — it would have added a panel, not a
+capability, and the PDD says so in advance rather than in hindsight.
+
+**M9 and M10 are built, so the submission is not read-only.** PDD 7.1 says that
+if M9 is cut the core submission produces no external action, and that this is
+a complete outcome rather than a gap. It was not cut: one action leaves the
+system, as [a dry-run journal batch](#the-journal-export-make-export) — 16
+vouchers, balanced, schema-validated, never transmitted. M10 is what happens
+when the model behind it goes away: [zero confirmations and 283 deterministic
+rows byte-identical](#graceful-degradation-make-ui-outage).
+
+**Day 3 is exceeded rather than met.** The Level 1 requirement is incremental
+state across Day 1 → Day 2. The demo store runs **three checkpoints at days 1,
+12 and 24** across a 24-day delivery window, which is what makes the residual
+visibly rise before it falls — a two-day run cannot show that shape at all.
+
+**Split-settlement subset-sum is the one cut that costs something, and it is
+cut for a reason that is not scheduling.** It is the rule that would fix the
+held-out set's 52 false matches, PDD 6.2 anticipates exactly this migration,
+and building it now would be tuning against results already seen. It belongs in
+a version whose evaluation uses a seed nobody has looked at.
+See [LIMITATIONS.md](LIMITATIONS.md).
+
 ## The AI evaluation set — declared before it was run
 
 **Seeds 1000–1019 inclusive. All twenty. No seed will be excluded for any

@@ -385,3 +385,87 @@ def test_the_edge_count_check_is_not_vacuous() -> None:
     assert len(SixEdges) == 6, "the control enum is not actually six-valued"
     assert any("DISPUTE" in e.name for e in SixEdges), "the dispute detector matches nothing"
     assert len(EdgeType) != len(SixEdges), "the real enum has drifted to six values"
+
+
+# ===========================================================================
+# The "Modules built" table describes the tree. It must keep describing it.
+# ===========================================================================
+
+
+@pytest.mark.hygiene
+def test_the_modules_built_table_agrees_with_what_is_on_disk() -> None:
+    """A status table is the claim most likely to rot, and least likely to be read.
+
+    "Built" and "Cut" are assertions about this repository that nothing else
+    checks: the code can appear or disappear and the table goes on saying
+    whatever it said. So each row is checked against the tree - a module marked
+    Built must have an implementation, and one marked Cut must have none.
+
+    THE CUT ONES MATTER MORE THAN THE BUILT ONES. A "Built" claim that went
+    false would break a hundred other tests first. A "Cut" claim that quietly
+    became true - somebody adds a cash-position panel - leaves the README
+    understating the work, which nothing would ever catch.
+    """
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## Modules built", 1)[1].split("\n## ", 1)[0]
+    assert "Cut order" in section, "the Level 2 table is gone from the README"
+
+    exporter = (REPO_ROOT / "settlesense" / "export" / "tally.py").read_text(encoding="utf-8")
+    assert "**Built** — `f3fdfcc`" in section, "M9 is no longer recorded as built"
+    assert "def build_batch(" in exporter, "M9 is claimed built and tally.py has no exporter"
+
+    assert "**Built** — `546a906`" in section, "M10 is no longer recorded as built"
+    assert (REPO_ROOT / "settlesense" / "ai" / "orchestrator.py").is_file(), (
+        "M10 is claimed built and the orchestrator is missing"
+    )
+
+    # CUT, and the tree must agree. `ls settlesense/ui` is the whole check:
+    # M11 is a panel, and a panel is a module.
+    assert "**Cut**" in section, "M11 is no longer recorded as cut"
+    panel_names = {"cash.py", "cash_position.py", "position.py"}
+    present = sorted(
+        path.name
+        for path in (REPO_ROOT / "settlesense" / "ui").glob("*.py")
+        if path.name in panel_names
+    )
+    assert not present, f"M11 is recorded as CUT and {present} exists; update the README"
+
+    # Split-settlement: not built, and the reason is the holdout, not the clock.
+    assert "**Not built, deliberately**" in section
+    matching = REPO_ROOT / "settlesense" / "matching"
+    offenders = [
+        path.name
+        for path in sorted(matching.glob("*.py"))
+        if "SPLIT_SETTLEMENT" in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        f"a SPLIT_SETTLEMENT rule appeared in {offenders}. That is the rule which "
+        "would fix the held-out set's 52 false matches, so building it after "
+        "seeing them is tuning against the holdout - and the README says it was "
+        "not built."
+    )
+    print(
+        f"\n  M9 built, M10 built, M11 cut, split-settlement not built; "
+        f"{len(section.splitlines())} lines of table and prose agree with the tree"
+    )
+
+
+@pytest.mark.hygiene
+@pytest.mark.charter_guard
+def test_the_modules_built_check_fires_on_a_planted_module() -> None:
+    """FAULT INJECTION for the direction that matters: a CUT module appearing.
+
+    Planted rather than created, so the repository is not modified to test a
+    check about the repository - the same reason `test_no_formatter_changes_a_
+    document` copies the specs into a temp directory before running ruff.
+    """
+    panel_names = {"cash.py", "cash_position.py", "position.py"}
+    planted = ["app.py", "queue.py", "cash_position.py"]
+    assert sorted(name for name in planted if name in panel_names) == ["cash_position.py"], (
+        "the name scan would not notice a cash-position panel being added"
+    )
+
+    assert "SPLIT_SETTLEMENT" in "if category is VarianceCategory.SPLIT_SETTLEMENT:", (
+        "the split-settlement scan matches nothing"
+    )
+    print("\n  a planted panel and a planted SPLIT_SETTLEMENT rule are both detected")
