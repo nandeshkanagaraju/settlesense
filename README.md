@@ -437,12 +437,12 @@ cannot be given one. See [LIMITATIONS](LIMITATIONS.md).
 | `settlesense` | 38 | 0 |
 | `llm_only` | — | — (no fixture set for this seed) |
 
-**Throughput:** the whole target — ingest, engine, all baselines, report writing,
-interpreter start — took **0.861 s wall clock** for 5,027 cases, about **5,800
-cases/s end to end**. That is a single untimed-by-design run and is *not*
-comparable to the bench's median-of-three, which excludes baselines and report
-writing and is measured on the dev seed because `make bench` must never touch
-the holdout.
+**Throughput on the holdout was not captured.** The holdout ran before the
+runner was instrumented, so there is no `throughput.md` beside its
+`results.json` — and the holdout is run once, so there is no second run to
+measure. A wall-clock figure was quoted here and has been removed: nothing in
+the repository contained it, and re-running to produce one is exactly what the
+holdout must not have. See [LIMITATIONS.md](LIMITATIONS.md).
 
 #### The disagreement, which is the finding
 
@@ -475,6 +475,19 @@ failure, reported unadjusted.** Nothing was changed in response to it — see
 
 ## Reproducing
 
+**Setup.** Python 3.11 or newer. Nothing here needs `OPENAI_API_KEY` — tests,
+eval, bench and the UI all replay from `fixtures/llm/`, and `make
+record-fixtures` is the only target that would spend anything.
+
+```
+python -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev]'
+```
+
+The `[dev]` extra is not optional in practice: it carries ruff, mypy and
+lxml-stubs, and `make check` runs all three. Every `make` target prefers
+`.venv/bin/python` when it exists, so activating is enough.
+
 ```
 make gen           # dev dataset,      seed 42
 make gen-holdout   # held-out dataset, seed 999, includes withheld noise types
@@ -484,10 +497,62 @@ make eval-set      # regenerate the AI evaluation set (seeds 1000-1019)
 make bench         # throughput scaling table -> reports/bench.md
 make test          # no network, deterministic, under 120 seconds
 make check         # ruff + mypy + determinism guard tests
+
+make demo-state    # build the state DB the queue reads (writes)
+make ai-store      # replay the AI layer over the persisted store (no spend)
+make ui-static     # the evidence queue as one HTML file
+make ui-outage     # the same queue with a simulated model outage (M10)
+make export        # CONFIRMED -> Tally-compatible XML, dry run (M9)
+make screenshots   # regenerate four of the six committed PNGs (needs Chrome)
 ```
 
 Targets that have no implementation yet refuse and exit non-zero. They never
 pass silently.
+
+**Everything regenerates byte-identically except two files, and those two turn
+the suite red.** `data/dev`, `data/holdout`, `reports/eval/results.json`,
+`reports/ui/queue.html`, `reports/ui/queue-outage.html`,
+`reports/ai/store_path.json`, the export XML and the four `make screenshots`
+PNGs all come back unchanged. A diff in any of them is a real finding.
+
+`reports/bench.md` and `reports/eval/throughput.md` are the exceptions. They
+are committed — the README quotes their throughput figures, and a quoted number
+with no artifact behind it is unfalsifiable — but they record *durations*,
+which differ on every run and every machine.
+
+So **`make bench` followed by `make test` fails, deliberately.**
+`tests/test_bench.py` cross-checks the throughput table above against
+`bench.md`, and rewriting one without the other is exactly the drift that check
+exists to catch. It is not a flaky test and it is not a dirty-tree warning:
+after `make bench` you either `git checkout -- reports/bench.md`, or update the
+README table in the same commit and say which machine produced it. The same
+applies to `make eval` and `throughput.md`. Nothing else in the documented
+pipeline leaves the tree modified.
+
+### The screenshots, and which two are manual
+
+`make screenshots` regenerates four of the six PNGs under `reports/ui/` from
+the committed HTML that `make ui-static` and `make ui-outage` produce. It needs
+Chrome or Chromium and refuses with exit 3 if it cannot find one.
+
+**The method is reproducible; the bytes are not, and are not claimed to be.**
+Chrome's version, the installed fonts and the display scale all move them, in
+the same way durations move `bench.md`. Regenerate and *look* — nothing hashes
+these. Before this target existed there was no procedure at all, so "does this
+screenshot still match what the code renders?" could only be answered by
+trusting the image.
+
+Two of the six — `streamlit-queue.png` and `streamlit-outage.png` — are
+**taken by hand and cannot currently be automated.** The Streamlit app renders
+client-side, and headless Chrome captures its grey skeleton placeholders: a 4s
+settle, a 25s settle and disabling XSRF and CORS all produced a 29KB image of a
+loading state. Writing that over a real screenshot would have looked like a
+successful run, so the target does not touch them. To retake them:
+
+```
+make demo-state && make ui     # then screenshot localhost:8501
+make ui-outage                 # SETTLESENSE_DB=reports/ui/outage.db make ui
+```
 
 ## Generator independence
 
@@ -581,8 +646,11 @@ filename, and a test asserts each one separately.
 **A model outage does not perturb a single rule-resolved case, and that is
 checked as bytes.** The deterministic rows are serialized before and after an
 outage run through the same canonical serializer M5a used to prove telemetry
-never reached `results.json`, and compared — 283 rows, 64,286 bytes, identical.
-A matching *count* would pass if two rows had swapped statuses.
+never reached `results.json`, and compared — 283 rows, identical. A matching
+*count* would pass if two rows had swapped statuses. The comparison is
+`test_24_the_deterministic_result_is_byte_identical_with_and_without_the_outage`,
+which prints the byte length it compared; the length itself is not published
+here, because no committed file holds it.
 
 | Outage run, dev store, day 24 | |
 |---|---:|

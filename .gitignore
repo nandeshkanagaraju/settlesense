@@ -4,6 +4,11 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+
+# `pip install -e .` writes this, and the README's own setup step is an
+# editable install - so the documented way to set the project up left an
+# untracked directory in `git status` for everyone who followed it.
+*.egg-info/
 *.pdf
 .DS_Store
 

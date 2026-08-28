@@ -3,7 +3,7 @@ exactly like a check that passes.
 
 Same class of defect as `-q` in two places swallowing `pytest -v`: nothing is
 red, nothing is missing from the output, and the thing you believe is happening
-is not happening. Three ways that can occur here, one test group each:
+is not happening. Four ways that can occur here, one test group each:
 
   A DECLARED DEPENDENCY IS NOT INSTALLED. Found live: five of eight declared
   dependencies were absent from the venv, including python-Levenshtein, which
@@ -18,7 +18,15 @@ is not happening. Three ways that can occur here, one test group each:
 
   TESTS STOP BEING COLLECTED. A file renamed out of the test_*.py pattern, a
   class that stopped being discovered, a conftest error that empties a
-  directory. The count drops and every remaining test still passes.
+  directory. The count drops and every remaining test still passes. The
+  baseline that catches this is checked in BOTH directions, because it was
+  once checked in one: three whole modules were absent from the manifest, and
+  a floor cannot be undercut by a file it has never heard of.
+
+  A TEST READS A FILE THE REPOSITORY DOES NOT HAVE. It passes on the machine
+  that wrote the file and fails in every clone. Found live: three tests read a
+  gitignored artifact, two of them dying on a raw FileNotFoundError, while the
+  committed pass-count said 1111.
 """
 
 from __future__ import annotations
@@ -26,6 +34,7 @@ from __future__ import annotations
 import ast
 import json
 import tomllib
+from collections.abc import Iterable
 from importlib import import_module
 from importlib.metadata import PackageNotFoundError, packages_distributions, version
 from pathlib import Path
@@ -261,6 +270,28 @@ def _baseline() -> dict[str, object]:
     return data
 
 
+def _test_files_on_disk() -> set[str]:
+    return {str(path.relative_to(REPO)) for path in TEST_DIR.glob("test_*.py")}
+
+
+def vanished_from_disk(baseline_files: Iterable[str], on_disk: Iterable[str]) -> list[str]:
+    """Baseline -> disk. Files the baseline knows that no longer exist."""
+    return sorted(set(baseline_files) - set(on_disk))
+
+
+def absent_from_baseline(baseline_files: Iterable[str], on_disk: Iterable[str]) -> list[str]:
+    """Disk -> baseline. THE DIRECTION THAT WAS MISSING.
+
+    A floor can only be undercut by a file it knows about. Three modules -
+    test_m10_degradation.py, test_m10_store_path.py and test_limitations.py -
+    were absent from the manifest entirely, so all 53 of their tests could have
+    been deleted with the suite green. A one-way check cannot see a file it
+    never knew about, and the newest tests are exactly the ones a stale
+    baseline has never heard of.
+    """
+    return sorted(set(on_disk) - set(baseline_files))
+
+
 def test_the_baseline_file_is_well_formed() -> None:
     data = _baseline()
     assert isinstance(data.get("total"), int) and int(data["total"]) > 0  # type: ignore[call-overload]
@@ -299,13 +330,62 @@ def test_no_baseline_file_disappeared_entirely() -> None:
     """A file deleted or renamed out of test_*.py collects zero, and zero is
     not less than its baseline if the file is simply absent from the run."""
     files = dict(_baseline()["files"])  # type: ignore[call-overload]
-    on_disk = {str(path.relative_to(REPO)) for path in TEST_DIR.glob("test_*.py")}
-    vanished = sorted(set(files) - on_disk)
+    vanished = vanished_from_disk(files, _test_files_on_disk())
     assert not vanished, (
         f"file(s) in the baseline no longer exist as test modules: {vanished}. "
         "A rename out of the test_*.py pattern removes every test in the file "
         "from collection without failing anything."
     )
+
+
+@pytest.mark.hygiene
+def test_every_test_file_on_disk_appears_in_the_baseline() -> None:
+    """THE OTHER DIRECTION, and it was missing on a full run.
+
+    The baseline was 82 tests stale and three whole modules were absent from
+    it: test_m10_degradation.py, test_m10_store_path.py, test_limitations.py.
+    Because the per-file check only walks baseline -> disk, and the total is a
+    floor, every one of their 53 tests could have been deleted with `make test`
+    green. The M10 recovery tests were among them - the guard protecting the
+    tests that guard the outage path had a floor of zero for them.
+
+    A stale baseline does not announce itself. It goes on passing, and the
+    slack it carries is invisible in a green run - which is the same reason
+    this file exists at all.
+    """
+    files = dict(_baseline()["files"])  # type: ignore[call-overload]
+    unknown = absent_from_baseline(files, _test_files_on_disk())
+    assert not unknown, (
+        f"test module(s) on disk that the baseline has never heard of: {unknown}.\n"
+        "Until the baseline knows a file, deleting every test in it fails nothing. "
+        "Regenerate in the commit that adds the file:\n"
+        "  SETTLESENSE_ACCEPT_BASELINE=1 make collection-baseline"
+    )
+
+
+@pytest.mark.hygiene
+def test_the_baseline_comparison_fires_in_BOTH_directions() -> None:
+    """POSITIVE CONTROL for each direction, fed a defect it must catch.
+
+    Both are constructed rather than reproduced: the baseline is correct now,
+    so the only way to show either direction can fail is to hand it the
+    disagreement. A one-way check passed for the whole of M9 and M10 while
+    looking exactly like a two-way one.
+    """
+    # Direction 1: a baseline file whose tests were deleted with the file.
+    assert vanished_from_disk(
+        {"tests/test_gone.py", "tests/test_kept.py"}, {"tests/test_kept.py"}
+    ) == ["tests/test_gone.py"], "a deleted module would not be noticed"
+
+    # Direction 2: a new module added without regenerating - THE HOLE.
+    assert absent_from_baseline(
+        {"tests/test_kept.py"}, {"tests/test_kept.py", "tests/test_brand_new.py"}
+    ) == ["tests/test_brand_new.py"], "a module the baseline never knew would not be noticed"
+
+    # And neither fires when the two agree, or they would fail on everything.
+    same = {"tests/test_a.py", "tests/test_b.py"}
+    assert vanished_from_disk(same, same) == []
+    assert absent_from_baseline(same, same) == []
 
 
 def test_total_collected_meets_the_baseline() -> None:
@@ -324,7 +404,7 @@ def test_total_collected_meets_the_baseline() -> None:
     if collected_files < on_disk:
         # Partial run. Assert what IS knowable: every file collected is one the
         # baseline knows about, so a partial run cannot mask a stray module.
-        unknown = sorted(collected_files - set(dict(data["files"])))  # type: ignore[call-overload]
+        unknown = absent_from_baseline(dict(data["files"]), collected_files)  # type: ignore[call-overload]
         assert not unknown, f"collected file(s) absent from the baseline: {unknown}"
         return
 
@@ -358,3 +438,179 @@ def test_the_baseline_is_never_rewritten_by_the_test_suite() -> None:
                     "baseline from inside the suite. A baseline that updates itself "
                     "records whatever happened rather than what should happen."
                 )
+
+
+# ---------------------------------------------------------------------------
+# 4. Every file a test reads is IN THE REPOSITORY
+# ---------------------------------------------------------------------------
+
+READS_ALLOWED_TO_BE_ABSENT = {
+    "data/eval": (
+        "the 20-seed AI evaluation set: ~146MB, gitignored, and regenerable "
+        "byte-identically from (frozen generator commit, seed). The tests that "
+        "read it SKIP with a stated reason when it is absent."
+    ),
+    "reports/ui/state.db": (
+        "a build output of `make demo-state`. A committed database would drift "
+        "from the code that writes it, and the tests that read it skip when it "
+        "is absent rather than failing."
+    ),
+    "does-not-exist": (
+        "a literal, not a path: the reader-contract tests use it to prove a "
+        "loader refuses a missing file rather than inventing a default."
+    ),
+    "tests/.hygiene_probe": (
+        "a scratch file the repo-hygiene test creates and removes inside one "
+        "test, to prove its own scanner can fire."
+    ),
+}
+"""Paths a test may name that git does not track, each with the reason.
+
+DELIBERATELY SMALL AND DELIBERATELY ANNOYING TO EXTEND. Every entry is a place
+where the suite depends on something a fresh clone does not have, which is the
+defect this group exists to prevent. `test_no_read_allowance_is_stale` fails if
+an entry stops being referenced, so this cannot rot into a list of everything.
+"""
+
+
+def _repo_root_names(tree: ast.AST) -> set[str]:
+    """Names bound to the repository root in this module."""
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            dumped = ast.dump(node.value)
+            if (
+                isinstance(target, ast.Name)
+                and "__file__" in dumped
+                and ("parent" in dumped or "parents" in dumped)
+            ):
+                names.add(target.id)
+    return names
+
+
+def _div_chain(node: ast.AST) -> tuple[ast.AST, list[str]] | None:
+    """Resolve `BASE / "a" / "b"` to (BASE, ["a", "b"])."""
+    parts: list[str] = []
+    current = node
+    while isinstance(current, ast.BinOp) and isinstance(current.op, ast.Div):
+        if not (isinstance(current.right, ast.Constant) and isinstance(current.right.value, str)):
+            return None
+        parts.append(current.right.value)
+        current = current.left
+    return (current, list(reversed(parts))) if parts else None
+
+
+def _referenced_paths() -> dict[str, set[str]]:
+    """Every repo-relative path the test suite names, to `file:line` sites."""
+    found: dict[str, set[str]] = {}
+    for path in sorted(TEST_DIR.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, str(path))
+        roots = _repo_root_names(tree)
+        # A constant like `DATA = REPO / "data" / "dev"` becomes a root itself,
+        # so `DATA / "day1_ledger.csv"` resolves rather than being dropped.
+        aliases: dict[str, list[str]] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                chain = _div_chain(node.value)
+                if (
+                    isinstance(target, ast.Name)
+                    and chain
+                    and isinstance(chain[0], ast.Name)
+                    and chain[0].id in roots
+                ):
+                    aliases[target.id] = chain[1]
+        for node in ast.walk(tree):
+            chain = _div_chain(node)
+            if not chain or not isinstance(chain[0], ast.Name):
+                continue
+            base, parts = chain
+            if base.id in roots:  # type: ignore[attr-defined]
+                relative = "/".join(parts)
+            elif base.id in aliases:  # type: ignore[attr-defined]
+                relative = "/".join(aliases[base.id] + parts)  # type: ignore[attr-defined]
+            else:
+                continue
+            site = f"{path.relative_to(REPO)}:{getattr(node, 'lineno', 0)}"
+            found.setdefault(relative, set()).add(site)
+    return found
+
+
+def test_the_path_scanner_resolved_something() -> None:
+    """A scanner that resolves nothing passes every assertion below it."""
+    found = _referenced_paths()
+    assert len(found) >= 40, (
+        f"only {len(found)} path expressions resolved; the suite names far more, "
+        "so the AST walk has stopped matching the shape tests actually use"
+    )
+
+
+@pytest.mark.hygiene
+def test_every_file_a_test_reads_is_tracked_in_git(tracked_files: frozenset[str]) -> None:
+    """THE FILE MUST BE IN THE REPOSITORY, not merely on this machine.
+
+    `reports/ai/real_model_sample.json` was gitignored while three tests in
+    test_ai.py read it. Here it passed; in every fresh clone two of the three
+    died on a raw FileNotFoundError and the third on an assertion. The working
+    tree that wrote the file is the one place the defect is invisible.
+
+    TRACKED OR ALLOWLISTED, and absence is not an excuse. Checking only
+    "exists but untracked" would pass in a clean clone, where the file is
+    simply gone - which is precisely the environment that breaks. So a named
+    path must be something git has, or something this module has written down
+    a reason for.
+    """
+    offenders = []
+    for relative, sites in sorted(_referenced_paths().items()):
+        if relative in READS_ALLOWED_TO_BE_ABSENT:
+            continue
+        target = REPO / relative
+        if target.is_dir():
+            # Directories are not tracked; their contents are. A directory with
+            # nothing tracked under it is as absent from a clone as a file.
+            if any(name.startswith(f"{relative}/") for name in tracked_files):
+                continue
+            offenders.append(f"{relative} (directory, nothing tracked under it) {sorted(sites)}")
+        elif relative not in tracked_files:
+            state = "exists here but is untracked" if target.exists() else "absent"
+            offenders.append(f"{relative} ({state}) {sorted(sites)}")
+    assert not offenders, (
+        "test(s) read files git does not track:\n  "
+        + "\n  ".join(offenders)
+        + "\nA test reading an untracked file passes on the machine that wrote it "
+        "and fails for everyone else. Commit the file, or add it to "
+        "READS_ALLOWED_TO_BE_ABSENT with the reason."
+    )
+
+
+def test_no_read_allowance_is_stale() -> None:
+    """An allowance nobody uses is an allowance that stopped being examined."""
+    referenced = set(_referenced_paths())
+    unused = sorted(set(READS_ALLOWED_TO_BE_ABSENT) - referenced)
+    assert not unused, (
+        f"READS_ALLOWED_TO_BE_ABSENT lists path(s) no test names any more: {unused}. "
+        "Remove them; a standing exemption for something that no longer exists is "
+        "how the list becomes a list of everything."
+    )
+    for relative, reason in READS_ALLOWED_TO_BE_ABSENT.items():
+        assert len(reason) > 40, f"{relative} is exempted without a real reason"
+
+
+@pytest.mark.hygiene
+def test_the_untracked_read_scanner_would_fire(tracked_files: frozenset[str]) -> None:
+    """POSITIVE CONTROL. The scanner must catch the defect it was written for.
+
+    Fed the exact shape that shipped - a module-level constant pointing at a
+    file git does not track - it has to object. A scanner that cannot fail here
+    is decoration on a green run.
+    """
+    invented = "reports/ai/not_committed_sample.json"
+    assert invented not in tracked_files
+    offenders = [
+        relative
+        for relative in (invented,)
+        if relative not in tracked_files and relative not in READS_ALLOWED_TO_BE_ABSENT
+    ]
+    assert offenders == [invented], "the tracked-file test would not have objected"

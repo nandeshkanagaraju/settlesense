@@ -245,6 +245,22 @@ DEV_CHECKPOINTS = (1, 12, 24)
 
 
 @pytest.fixture(scope="session")
+def tracked_files() -> frozenset[str]:
+    """Every path `git ls-files` knows, as repo-relative POSIX strings.
+
+    Session-scoped because it shells out: what git tracks cannot change during
+    a run, and several hygiene checks want the same answer.
+    """
+    import subprocess
+
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    out = subprocess.run(
+        ["git", "ls-files"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout
+    return frozenset(line for line in out.splitlines() if line)
+
+
+@pytest.fixture(scope="session")
 def dev_store_template(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     """Path to a dev store built over days 1, 12, 24. Do NOT open for writing."""
     from settlesense.config import load_config

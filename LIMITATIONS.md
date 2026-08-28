@@ -62,6 +62,21 @@ means a second run. Test 22 asserts `reports/eval-holdout/throughput.md` does
 not exist, so the row cannot be quietly filled in later — the only way that file
 could appear is the run that must not happen.
 
+**And the README published one anyway, for a while.** It read "0.861 s wall
+clock for 5,027 cases, about 5,800 cases/s end to end" about this run — the
+exact figure this section says does not exist. No committed file contained it;
+it was a number someone watched go past once. Test 22 guards the *file* and had
+nothing to say about prose, so the contradiction sat between two documents that
+were each internally consistent.
+
+Found by a clean-room trace of every README and LIMITATIONS figure back to an
+artifact, and removed rather than reproduced: reproducing it is the second run.
+It is the same class as the "about ₹2.49 per 1,000 rows" cost and the "~90 days"
+density figure — a number with no derivation recorded anywhere, which reads as
+measurement and cannot be checked. `test_every_published_figure_traces_to_an_artifact`
+now fails on any figure in either document that no committed artifact contains,
+which is the check that would have caught all three.
+
 **The separation held in practice, not only in tests.** `reports/eval/results.json`
 was byte-identical before and after the commit that wired the timer in — checked
 against a copy taken beforehand, not inferred from the test that asserts it.
@@ -552,10 +567,12 @@ and none can be recovered from the fixtures.
 macOS-26.6-arm64-arm-64bit-Mach-O`, stated in `reports/bench.md`'s header and
 quoted into the README verbatim rather than retyped. Median of three, never the
 best run. Nothing here establishes behaviour on a different CPU, a different
-Python, or under contention. The same caveat applies to the suite itself: it
-runs at **103.2s against SDD 7's 120s budget** on that machine, and a slower one
-may breach it — the budget is a wall-clock assertion, so it is a property of the
-machine as much as of the code.
+Python, or under contention. The same caveat applies to the suite itself: SDD
+7's **120s budget** is a wall-clock assertion, so it is a property of the
+machine as much as of the code, and a slower one may breach it. The realised
+duration is printed by every run rather than quoted here — it differs run to
+run, no committed file holds it, and the figure that used to sit in this
+sentence had already drifted from what the suite actually measured.
 
 **Cross-platform reproducibility was never run.** The determinism claims are
 verified by re-running on one machine, not by two machines agreeing.
