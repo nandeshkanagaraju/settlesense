@@ -164,7 +164,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.close:
             closed = close_exported(store, batch, args.arrival_day)
 
+        # THE FIGURES THE README QUOTES, WRITTEN DOWN. The XML carries the 32
+        # ledger amounts that sum to the total, and a reader who wants the
+        # total has to add them up - so the README's balanced-journal line was
+        # a number no committed file contained. It was the third figure this
+        # project has published without an artifact behind it, after the
+        # Rs2.49 per-1,000-rows cost and the "~90 days" density.
+        #
+        # Deterministic and tiny. `--close` is excluded from it deliberately:
+        # it mutates state a later run needs, so a summary that recorded it
+        # would differ between an export and an export-then-close and stop
+        # being comparable.
+        summary = {
+            "batch_date": batch_date.isoformat(),
+            "cleared_without_voucher": len(batch.cleared),
+            "idempotency_key": batch.idempotency_key,
+            "total_credits": f"{batch.total_credits:.2f}",
+            "total_debits": f"{batch.total_debits:.2f}",
+            "voucher_count": len(batch.lines),
+            "xml_file": path.name,
+        }
+        summary_path = args.out / "summary.json"
+        summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", "utf-8")
+
     print(f"wrote {path}")
+    print(f"wrote {summary_path}")
     print(f"  {len(batch.lines)} vouchers, debits {batch.total_debits:,.2f} = credits")
     print(f"  idempotency key {batch.idempotency_key}")
     print(

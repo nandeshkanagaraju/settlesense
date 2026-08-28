@@ -1,0 +1,9 @@
+{
+  "batch_date": "2026-11-30",
+  "cleared_without_voucher": 267,
+  "idempotency_key": "c6ded63298100e2cbd42d273698c721c90da877793fbec21cb72a93404b5864a",
+  "total_credits": "2781220.13",
+  "total_debits": "2781220.13",
+  "voucher_count": 16,
+  "xml_file": "tally-2026-11-30-c6ded63298100e2c.xml"
+}

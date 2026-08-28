@@ -6,7 +6,7 @@
     "tests/test_bench.py": 22,
     "tests/test_config_completeness.py": 24,
     "tests/test_determinism_guard.py": 17,
-    "tests/test_env_integrity.py": 80,
+    "tests/test_env_integrity.py": 81,
     "tests/test_eval_set.py": 49,
     "tests/test_file_reading_contract.py": 20,
     "tests/test_gen_ids.py": 9,
@@ -29,6 +29,7 @@
     "tests/test_no_float_decisions.py": 20,
     "tests/test_noise_coverage.py": 36,
     "tests/test_normalize.py": 75,
+    "tests/test_published_figures.py": 5,
     "tests/test_refund_timing.py": 9,
     "tests/test_repeat_purchase.py": 12,
     "tests/test_repo_hygiene.py": 21,
@@ -43,5 +44,5 @@
     "tests/test_verbosity_honoured.py": 8,
     "tests/test_view_parity.py": 9
   },
-  "total": 1118
+  "total": 1124
 }

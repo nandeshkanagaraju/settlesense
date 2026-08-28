@@ -437,12 +437,12 @@ cannot be given one. See [LIMITATIONS](LIMITATIONS.md).
 | `settlesense` | 38 | 0 |
 | `llm_only` | — | — (no fixture set for this seed) |
 
-**Throughput:** the whole target — ingest, engine, all baselines, report writing,
-interpreter start — took **0.861 s wall clock** for 5,027 cases, about **5,800
-cases/s end to end**. That is a single untimed-by-design run and is *not*
-comparable to the bench's median-of-three, which excludes baselines and report
-writing and is measured on the dev seed because `make bench` must never touch
-the holdout.
+**Throughput on the holdout was not captured.** The holdout ran before the
+runner was instrumented, so there is no `throughput.md` beside its
+`results.json` — and the holdout is run once, so there is no second run to
+measure. A wall-clock figure was quoted here and has been removed: nothing in
+the repository contained it, and re-running to produce one is exactly what the
+holdout must not have. See [LIMITATIONS.md](LIMITATIONS.md).
 
 #### The disagreement, which is the finding
 
@@ -581,8 +581,11 @@ filename, and a test asserts each one separately.
 **A model outage does not perturb a single rule-resolved case, and that is
 checked as bytes.** The deterministic rows are serialized before and after an
 outage run through the same canonical serializer M5a used to prove telemetry
-never reached `results.json`, and compared — 283 rows, 64,286 bytes, identical.
-A matching *count* would pass if two rows had swapped statuses.
+never reached `results.json`, and compared — 283 rows, identical. A matching
+*count* would pass if two rows had swapped statuses. The comparison is
+`test_24_the_deterministic_result_is_byte_identical_with_and_without_the_outage`,
+which prints the byte length it compared; the length itself is not published
+here, because no committed file holds it.
 
 | Outage run, dev store, day 24 | |
 |---|---:|

@@ -83,3 +83,17 @@ ui/*
 # The AI_VERIFIED rows, which sit at ranks 58-59 and are the reason the page
 # stopped truncating at 40.
 !ui/queue-ai-verified.png
+
+# THE M9 EXPORT, committed on the same rule as everything above it: the README
+# publishes the balanced-journal total and the voucher count, and until now
+# reports/export/ held ZERO committed files - so Rs2,781,220.13 was a number no
+# artifact contained. The XML carries the 32 ledger amounts that sum to it;
+# summary.json states it outright, because a figure a reader has to derive by
+# addition is not one they can check at a glance.
+#
+# Both are deterministic: same store, same results.json, same bytes, and the
+# idempotency key in the filename is a function of the content.
+!export/
+export/*
+!export/summary.json
+!export/tally-2026-11-30-c6ded63298100e2c.xml
