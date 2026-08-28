@@ -25,6 +25,7 @@ from settlesense.exceptions.store import (
     Population,
 )
 from settlesense.ingest import DayDataset
+from settlesense.types import ExceptionStatus
 from settlesense.ui.queue import (
     SEQUENCE_CAPTION,
     EvidencePanel,
@@ -77,6 +78,9 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .seq { border: 1px solid #d0d7de; border-radius: 6px; padding: 10px 12px;
        margin: 0 0 16px; }
 .caption { color: #57606a; font-size: 12.5px; margin: 6px 0 0; }
+.scope { color: #7d4e00; background: #fff8c5; border: 1px solid #eac54f;
+         border-radius: 6px; padding: 8px 12px; margin: 10px 0 0;
+         font-size: 13px; }
 details { margin: 4px 0 0; }
 summary { cursor: pointer; color: #0969da; font-size: 12.5px; }
 .panel { border-left: 3px solid #d0d7de; margin: 8px 0 12px 4px;
@@ -339,13 +343,31 @@ def render_page(
     )
     truncation = f'<p class="caption">{_esc(scope_notice(len(shown), len(rows)))}</p>'
     day_note = f"day {day}" if day is not None else f"all days ({', '.join(str(d) for d in days)})"
+
+    # DERIVED FROM THE STORE, NEVER PASSED IN. A caller who had to remember to
+    # set an `outage=True` flag would forget it on exactly the run where the
+    # warning matters, and a page carrying it wrongly would be worse than one
+    # carrying it not at all. The presence of a PENDING_AI_UNAVAILABLE row IS
+    # the condition: nothing else in this project writes that status.
+    #
+    # WHY A READER NEEDS IT. The outage store covers days 1-12 and its AI path
+    # never ran, so its Population A residual is 286 against the full run's 50.
+    # Both numbers are correct and they are not comparable, and two screenshots
+    # side by side give a reader no way to know that.
+    outage_note = ""
+    if any(row.status is ExceptionStatus.PENDING_AI_UNAVAILABLE for row in rows):
+        span = f"{days[0]}-{days[-1]}" if len(days) > 1 else str(days[0])
+        outage_note = (
+            f'<p class="scope">Outage run: days {_esc(span)} only, AI path did not '
+            "execute. Residual counts are not comparable with the full-run queue.</p>"
+        )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <title>SettleSense — evidence queue</title><style>{_CSS}</style></head><body>
 <h1>SettleSense — evidence queue</h1>
 <p class="sub">Read-only view of the state DB · {_esc(day_note)} ·
 calendar {_esc(config.calendar.version)} · config {_esc(config.config_hash)}</p>
-
+{outage_note}
 <h2>Populations</h2>
 {_population_block(summaries)}
 

@@ -28,6 +28,7 @@ from __future__ import annotations
 import ast
 import json
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -464,4 +465,98 @@ def test_the_queue_now_shows_an_ai_verified_row(
     print(
         f"\n  queue thesis column: {counts[VERIFIED_DETERMINISTIC]} DETERMINISTIC, "
         f"{counts[VERIFIED_AI]} AI_VERIFIED"
+    )
+
+
+@pytest.mark.charter_guard
+def test_the_persisted_confidence_is_the_score_the_verifier_computed(
+    config: AppConfig, dataset: Any, truth: frozenset[str], fresh_store: Any
+) -> None:
+    """FOUND IN A COMMITTED SCREENSHOT, not by a test.
+
+    `queue-ai-verified.png` showed Confidence 0.00 on both AI_VERIFIED rows,
+    under a caption saying 0.00 means NOT SCORED. Both were false: the verifier
+    had scored that pair 1.0000 on all five components, and
+    `confirm_exception` had no confidence parameter, so the row kept the
+    `_UNSCORED` zero it was opened with. Every number on screen was wrong and
+    nothing failed.
+
+    So the assertion is EQUALITY between what the loop computed and what the
+    store holds - not "greater than zero", which a second bug writing a
+    constant 1.00 would also satisfy.
+    """
+    store = fresh_store()
+    index = pair_index(dataset)
+    result = run_store_ai_stage(store, dataset, config, ReplayLLMClient(), DAY, index)
+    assert result.confirmed, "nothing was confirmed; there is no score to check"
+
+    rows = {row.exception_id: row for row in store.get_queue(ALL_STATUSES)}
+    checked = 0
+    for pair, outcome in result.outcomes:
+        if not outcome.confirmed:
+            continue
+        assert outcome.confidence is not None, "a confirmation carried no confidence at all"
+        expected = outcome.confidence.score
+        assert expected > Decimal("0"), (
+            "the verifier scored this confirmation ZERO, so the caption needs to "
+            "distinguish 'not scored' from 'scored zero' rather than the store "
+            "needing a fix"
+        )
+        for exception_id in pair.exception_ids:
+            assert rows[exception_id].confidence == expected, (
+                f"{exception_id} holds {rows[exception_id].confidence}, the verifier "
+                f"computed {expected}"
+            )
+            checked += 1
+    assert checked, "no confirmed row was checked"
+
+    # NOT SCORED STILL MEANS NOT SCORED. A deterministic row must keep its zero;
+    # writing a confidence for a rule outcome would put rules and hypotheses on
+    # one scale, which is the comparison this project exists to keep apart.
+    deterministic = [
+        row for row in rows.values() if row.resolved_by is ResolutionSource.DETERMINISTIC
+    ]
+    assert deterministic, "no deterministic rows to compare against"
+    assert all(row.confidence == Decimal("0") for row in deterministic), (
+        "a rule outcome acquired a confidence score"
+    )
+    print(
+        f"\n  {checked} AI rows hold the verifier's own {expected}; "
+        f"{len(deterministic)} deterministic rows still unscored at 0"
+    )
+
+
+@pytest.mark.charter_guard
+def test_the_confidence_caption_matches_what_the_column_can_hold(
+    config: AppConfig, dataset: Any, fresh_store: Any
+) -> None:
+    """The caption says 0.00 means NOT SCORED. That must stay true of the page.
+
+    It was false for two rows: they were scored, and scored 1.0000. The caption
+    is only honest if every 0.00 the table can display really is an unscored
+    row - which means no AI-verified row may render 0.00 while carrying a
+    non-zero score.
+    """
+    from settlesense.ui.queue import VERIFIED_AI, build_rows
+
+    store = fresh_store()
+    run_store_ai_stage(store, dataset, config, ReplayLLMClient(), DAY, pair_index(dataset))
+    rows = build_rows(store)
+
+    ai_rows = [row for row in rows if row.verified_by == VERIFIED_AI]
+    assert ai_rows, "no AI rows; the caption claim is untested"
+    for row in ai_rows:
+        rendered = row.confidence_or_placeholder
+        assert rendered != "0.00", (
+            f"{row.exception_id} renders 0.00 under a caption saying that means "
+            f"NOT SCORED, while carrying a score of {row.confidence}"
+        )
+        assert rendered == f"{row.confidence:.2f}"
+
+    caption = (REPO / "settlesense" / "ui" / "render.py").read_text(encoding="utf-8")
+    assert "means NOT SCORED" in caption
+    assert "reports/ui/queue-ai-verified.png"  # the artifact this guards
+    print(
+        f"\n  {len(ai_rows)} AI rows render "
+        f"{sorted({row.confidence_or_placeholder for row in ai_rows})}, never 0.00"
     )

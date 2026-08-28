@@ -619,3 +619,72 @@ def test_no_clock_is_read_by_the_outage_path() -> None:
     assert derived > earlier, "the arrival day does not move the date"
     assert (derived - earlier).days == OUTAGE_DAY - 1
     print(f"\n  no clock in the outage path; day 1 -> {earlier}, day {OUTAGE_DAY} -> {derived}")
+
+
+OUTAGE_NOTICE = (
+    "Outage run: days 1-12 only, AI path did not execute. Residual counts are "
+    "not comparable with the full-run queue."
+)
+
+
+@pytest.mark.charter_guard
+def test_the_outage_page_says_its_numbers_are_not_comparable(
+    config: AppConfig, fresh_store: Any, tmp_path: Path
+) -> None:
+    """Present on the outage page, ABSENT from the normal one. Both halves.
+
+    The outage store covers days 1-12 and its AI path never ran, so its
+    Population A residual is 286 against the full run's 50. Both figures are
+    correct and they are NOT comparable - and two screenshots side by side give
+    a reader no way to know that.
+
+    DERIVED FROM THE STORE, not passed in by the caller. A flag would be
+    forgotten on exactly the run where the warning matters, and a page carrying
+    it wrongly is worse than one carrying it not at all - so the presence of a
+    PENDING_AI_UNAVAILABLE row IS the condition. This test proves both
+    directions of that derivation, because a notice that appeared on every page
+    would be as useless as one that appeared on none.
+    """
+    from settlesense.ui.render import render_page
+
+    as_of = as_of_for_arrival_day(12, config)
+
+    healthy = _store(config, tmp_path / "healthy.db", days=(1, 12))
+    dataset = healthy.cumulative_dataset(12, DATA, config)
+    clean_page = render_page(healthy, dataset, config, as_of)
+    assert "Outage run:" not in clean_page, (
+        "the notice appears on a page with no outage, so it says nothing"
+    )
+
+    broken = _store(config, tmp_path / "broken.db", days=(1, 12))
+    result = run_ai_stage(broken, dataset, config, OutageLLMClient(), 12)
+    assert result.pending_unavailable, "no outage occurred; the notice would be wrong"
+    outage_page = render_page(broken, dataset, config, as_of)
+    assert OUTAGE_NOTICE in outage_page, (
+        "the outage page does not state that its residual counts are not comparable"
+    )
+
+    # AND THE COMMITTED ARTIFACTS, which are what a reader actually opens.
+    committed_outage = (REPO / "reports" / "ui" / "queue-outage.html").read_text(encoding="utf-8")
+    committed_normal = (REPO / "reports" / "ui" / "queue.html").read_text(encoding="utf-8")
+    assert OUTAGE_NOTICE in committed_outage, "reports/ui/queue-outage.html is stale"
+    assert "Outage run:" not in committed_normal, "the full-run page carries the outage notice"
+
+    # THE DAY RANGE IS REALISED, not typed into the template. A store over a
+    # DIFFERENT range must say so rather than repeating "1-12".
+    #
+    # Days 1/12/24 rather than a single day: `_sequence_block` asserts the
+    # residual RISES before it falls, which is the point that block exists to
+    # make, and a one-day store has no sequence to rise. That assertion caught
+    # this test trying to render a page nobody would ever build.
+    wider = _store(config, tmp_path / "wider.db", days=CHECKPOINTS)
+    wide_dataset = wider.cumulative_dataset(OUTAGE_DAY, DATA, config)
+    wide_result = run_ai_stage(wider, wide_dataset, config, OutageLLMClient(), OUTAGE_DAY)
+    assert wide_result.pending_unavailable, "the wider store had no outage either"
+    wide_page = render_page(wider, wide_dataset, config, as_of_for_arrival_day(OUTAGE_DAY, config))
+    assert "days 1-24 only" in wide_page, "the day range is hardcoded, not read"
+
+    print(
+        f"\n  notice on the outage page ({len(result.pending_unavailable)} rows pending), "
+        "absent from the full run, day range read from the store"
+    )

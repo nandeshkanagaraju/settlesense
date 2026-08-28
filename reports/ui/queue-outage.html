@@ -21,6 +21,9 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .seq { border: 1px solid #d0d7de; border-radius: 6px; padding: 10px 12px;
        margin: 0 0 16px; }
 .caption { color: #57606a; font-size: 12.5px; margin: 6px 0 0; }
+.scope { color: #7d4e00; background: #fff8c5; border: 1px solid #eac54f;
+         border-radius: 6px; padding: 8px 12px; margin: 10px 0 0;
+         font-size: 13px; }
 details { margin: 4px 0 0; }
 summary { cursor: pointer; color: #0969da; font-size: 12.5px; }
 .panel { border-left: 3px solid #d0d7de; margin: 8px 0 12px 4px;
@@ -34,7 +37,7 @@ summary { cursor: pointer; color: #0969da; font-size: 12.5px; }
 <h1>SettleSense — evidence queue</h1>
 <p class="sub">Read-only view of the state DB · all days (1, 12) ·
 calendar calendar_v1 · config 12e9a009b59251d8</p>
-
+<p class="scope">Outage run: days 1-12 only, AI path did not execute. Residual counts are not comparable with the full-run queue.</p>
 <h2>Populations</h2>
 <div class="pops"><div class="pop"><b>286</b> residual<br><span>of 5,026 payments</span><br><span>A · case · 302 tracked</span></div><div class="pop"><b>6</b> residual<br><span>of 39 batches</span><br><span>B · batch link · 9 tracked</span></div><div class="pop"><b>1</b> residual<br><span>of 29 rows</span><br><span>C · row variance · 1 tracked</span></div></div><p class="caption">Three populations, three denominators. They are never averaged into one rate: a batch is not a payment, and dividing one by the other would produce a number about nothing.</p>
 

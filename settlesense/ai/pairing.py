@@ -227,6 +227,13 @@ def run_store_ai_stage(
                     arrival_day=arrival_day,
                     actor=AuditActor.AI_VERIFIED,
                     resolved_by=ResolutionSource.AI_VERIFIED,
+                    # THE SCORE THE VERIFIER COMPUTED, carried through. Omitting
+                    # it left the row at the `_UNSCORED` zero it was opened with,
+                    # and the queue rendered 0.00 for a hypothesis that had
+                    # scored 1.0000 - under a caption saying 0.00 means NOT
+                    # SCORED. Confirmed outcomes always carry a confidence here,
+                    # because `should_auto_confirm` cannot pass without one.
+                    confidence=outcome.confidence.score if outcome.confidence is not None else None,
                 )
                 confirmed.append(exception_id)
             else:

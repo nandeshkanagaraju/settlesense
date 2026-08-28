@@ -729,6 +729,7 @@ class ExceptionStore:
         arrival_day: int,
         actor: AuditActor = AuditActor.DETERMINISTIC,
         resolved_by: ResolutionSource = ResolutionSource.DETERMINISTIC,
+        confidence: Decimal | None = None,
     ) -> bool:
         """Confirm once. Replay is a no-op. Returns whether it was NEW.
 
@@ -736,6 +737,17 @@ class ExceptionStore:
         explaining; emitting the accounting entry is a separate act by a
         separate actor, and conflating them would make "we explained it" and
         "we posted it" the same claim.
+
+        `confidence` DEFAULTS TO None, MEANING "DO NOT WRITE ONE". A rule
+        result has no confidence and must keep the `_UNSCORED` zero it was
+        opened with; a verified hypothesis has one and it has to survive.
+
+        This parameter did not exist until 2026-08-28, and its absence was a
+        silent data-loss bug rather than a missing feature: the M10 store path
+        confirmed a duplicate pair the verifier had scored 1.0000 on all five
+        components, and the queue rendered 0.00 - under a caption saying 0.00
+        means NOT SCORED. Every number on screen was wrong and nothing failed.
+        Found by reading a committed screenshot.
 
         INSERT OR IGNORE on the idempotency key is what makes a re-run of day
         3 harmless: the second attempt inserts nothing, transitions nothing,
@@ -775,6 +787,17 @@ class ExceptionStore:
                 evidence_ids=evidence_ids,
                 arrival_day=arrival_day,
             )
+        # WRITTEN BEFORE THE TRANSITION, so a reader who sees CONFIRMED never
+        # sees it beside a stale score. Stored as the Decimal's own string and
+        # NOT through `money()`: confidence is a RATIO, not money, and
+        # quantizing to paise would round a four-place score to two on the way
+        # into a column that reads back unquantized.
+        if confidence is not None:
+            self._connection.execute(
+                "UPDATE exceptions SET confidence = ? WHERE exception_id = ?",
+                (str(confidence), exception.exception_id),
+            )
+            self._connection.commit()
         self._transition(
             exception_id=exception.exception_id,
             target=ExceptionStatus.CONFIRMED,
