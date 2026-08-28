@@ -27,6 +27,7 @@ already, by colour, and the fix is asserted rather than assumed.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from settlesense.ai.client import LLMClient
@@ -35,7 +36,7 @@ from settlesense.ai.loop import LoopReport, run_loop
 from settlesense.config import AppConfig
 from settlesense.exceptions.store import RESIDUAL_STATES, ExceptionStore
 from settlesense.ingest import DayDataset
-from settlesense.types import AuditActor, ExceptionStatus, ResolutionSource
+from settlesense.types import AuditActor, Exception_, ExceptionStatus, ResolutionSource
 
 __all__ = [
     "OUTAGE_REASON",
@@ -83,6 +84,7 @@ def run_ai_stage(
     client: LLMClient,
     arrival_day: int,
     sendable: frozenset[str] | None = None,
+    rows: Sequence[Exception_] | None = None,
 ) -> AiStageResult:
     """Run the hypothesis loop over the residual set and persist the outcomes.
 
@@ -93,7 +95,11 @@ def run_ai_stage(
     own order - `get_queue` sorts by (-amount, exception_id) - so a partial
     outage fails on the same cases every run and the demo is reproducible.
     """
-    residual = store.get_queue(status_filter=RESIDUAL_STATES)
+    # `rows` mirrors `run_store_ai_stage`'s parameter: a caller narrowing the
+    # input says so, rather than the stage guessing. It is how a partial
+    # outage can be exercised at a stated size instead of whatever the
+    # residual set happens to be.
+    residual = list(rows) if rows is not None else list(store.get_queue(RESIDUAL_STATES))
     report = run_loop(
         tuple(residual),
         dataset,
@@ -136,6 +142,25 @@ def run_ai_stage(
             )
             confirmed.append(outcome.exception_id)
             continue
+        # AN EXAMINED ROW IS NO LONGER WAITING ON THE MODEL, and until
+        # 2026-08-28 it went on saying it was. Abstention wrote nothing to the
+        # store, so a row marked PENDING_AI_UNAVAILABLE by an outage kept that
+        # status after a later healthy run had looked at it and abstained: 53
+        # rows re-sent, 53 processed, and the queue still reporting a service
+        # failure that had ended. An operator reading it would go and chase an
+        # outage that was over.
+        #
+        # OPEN, not ABSTAINED. PENDING_AI_UNAVAILABLE -> OPEN is the only edge
+        # the lifecycle allows out of that state, and OPEN is the honest one:
+        # the row is unresolved and eligible again, which is exactly what it is.
+        if exception.status is ExceptionStatus.PENDING_AI_UNAVAILABLE:
+            store.mark_status(
+                outcome.exception_id,
+                ExceptionStatus.OPEN,
+                AuditActor.AI_VERIFIED,
+                "model reachable again; examined and abstained, no longer waiting on it",
+                arrival_day,
+            )
         abstained.append(outcome.exception_id)
 
     # SORTED, and asserted disjoint. The three lists are the denominators a

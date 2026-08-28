@@ -237,6 +237,20 @@ def run_store_ai_stage(
                 )
                 confirmed.append(exception_id)
             else:
+                # SAME CORRECTION AS THE ORCHESTRATOR. A pair marked
+                # PENDING_AI_UNAVAILABLE by an earlier outage and examined now
+                # is no longer waiting on the model, and leaving the status
+                # would report a service failure that had ended. Latent here
+                # rather than observed - this path's rows are normally OPEN -
+                # but the same wrong behaviour, so it gets the same fix.
+                if row.status is ExceptionStatus.PENDING_AI_UNAVAILABLE:
+                    store.mark_status(
+                        exception_id,
+                        ExceptionStatus.OPEN,
+                        AuditActor.AI_VERIFIED,
+                        "model reachable again; examined and abstained",
+                        arrival_day,
+                    )
                 abstained.append(exception_id)
 
     return StorePathResult(

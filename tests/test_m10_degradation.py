@@ -688,3 +688,129 @@ def test_the_outage_page_says_its_numbers_are_not_comparable(
         f"\n  notice on the outage page ({len(result.pending_unavailable)} rows pending), "
         "absent from the full run, day range read from the store"
     )
+
+
+def test_16b_a_partial_outage_at_a_stated_size_loses_nothing(
+    config: AppConfig, fresh_store: Any
+) -> None:
+    """3 of 10 fail: 7 processed, 3 pending, and 7 + 3 == 10.
+
+    `test_16` above asserts the same conservation over the whole 53-row
+    residual set, where 3 failures is a 6% blip. The build prompt's requirement
+    16 is 3 of TEN, and the ratio matters: a 30% failure rate is the realistic
+    degraded mode, and it is the one where a row can go missing between the
+    processed bucket and the pending one without the totals looking wrong.
+
+    The ten are the first ten in queue order, which `get_queue` fixes by
+    (-amount, exception_id), so which three fail is reproducible rather than
+    whatever the flakiness happened to land on.
+    """
+    store = fresh_store()
+    dataset = store.cumulative_dataset(OUTAGE_DAY, DATA, config)
+    ten = list(store.get_queue(RESIDUAL_STATES))[:10]
+    assert len(ten) == 10, f"only {len(ten)} residual rows; the ratio would not hold"
+
+    result = run_ai_stage(store, dataset, config, FlakyClient(failures=3), OUTAGE_DAY, rows=ten)
+    processed = len(result.confirmed) + len(result.abstained)
+
+    assert result.report.sent == 10, f"{result.report.sent} were sent, not 10"
+    assert len(result.pending_unavailable) == 3, result.pending_unavailable
+    assert processed == 7, f"{processed} processed, not 7"
+    assert processed + len(result.pending_unavailable) == 10, "a row went missing"
+
+    # NOTHING SILENTLY DROPPED, checked against the ids rather than the counts.
+    # Two counts adding to ten would also be satisfied by one row counted twice
+    # and another lost.
+    accounted = set(result.confirmed) | set(result.abstained) | set(result.pending_unavailable)
+    assert accounted == {row.exception_id for row in ten}, "the ids handled are not the ids sent"
+    assert len(accounted) == 10, "an id appears in two buckets"
+
+    statuses = {row.exception_id: row.status for row in store.get_queue(ALL_STATUSES)}
+    for exception_id in result.pending_unavailable:
+        assert statuses[exception_id] is ExceptionStatus.PENDING_AI_UNAVAILABLE
+    print(
+        f"\n  10 sent: {processed} processed, {len(result.pending_unavailable)} pending, "
+        f"{len(accounted)} distinct ids accounted for"
+    )
+
+
+@pytest.mark.charter_guard
+def test_14b_a_healthy_second_run_actually_clears_the_pending_rows(
+    config: AppConfig, fresh_store: Any
+) -> None:
+    """RECOVERY THROUGH THE AI STAGE ITSELF, which had never carried traffic.
+
+    `test_14_and_17` recovers through `run_day` - the DETERMINISTIC driver's
+    `reevaluate_open`. That is a real path and it works, but it is not this
+    one: nobody had ever run a second AI stage with a working client against
+    rows an outage had marked.
+
+    Running it found the bug. The stage wrote to the store on `unavailable` and
+    on `confirmed` and NOTHING on abstention, so 53 rows were re-sent, all 53
+    were examined and abstained, the result reported 0 pending - and the store
+    still said PENDING_AI_UNAVAILABLE on all 53. The queue would have gone on
+    reporting a service failure that had ended, and an operator reading it
+    would have gone to chase an outage that was over.
+
+    Exactly the store-path shape: code that exists, looks right, and has never
+    been asked to do the thing.
+    """
+    store = fresh_store()
+    dataset = store.cumulative_dataset(OUTAGE_DAY, DATA, config)
+
+    outage = run_ai_stage(store, dataset, config, OutageLLMClient(), OUTAGE_DAY)
+    pending_ids = set(outage.pending_unavailable)
+    assert pending_ids, "nothing went pending, so recovery proves nothing"
+    in_store = {
+        row.exception_id
+        for row in store.get_queue(ALL_STATUSES)
+        if row.status is ExceptionStatus.PENDING_AI_UNAVAILABLE
+    }
+    assert in_store == pending_ids, "the outage result and the store disagree"
+
+    healthy = ReplayLLMClient()
+    recovery = run_ai_stage(store, dataset, config, healthy, OUTAGE_DAY)
+
+    # THE COUNT MOVES. Both in the result and, the half that was broken, in the
+    # store - a result reporting 0 pending over a store holding 53 is the exact
+    # failure this test was written for.
+    assert recovery.report.sent >= len(pending_ids), "the pending rows were not re-sent"
+    assert set(recovery.pending_unavailable) == set(), recovery.pending_unavailable
+    still_pending = {
+        row.exception_id
+        for row in store.get_queue(ALL_STATUSES)
+        if row.status is ExceptionStatus.PENDING_AI_UNAVAILABLE
+    }
+    assert still_pending == set(), (
+        f"{len(still_pending)} rows still say the model is unavailable after a "
+        "healthy run examined them"
+    )
+    assert pending_ids <= set(recovery.abstained) | set(recovery.confirmed), (
+        "a row that was pending was neither examined nor confirmed on recovery"
+    )
+
+    # NO ROW PROCESSED TWICE. Disjoint buckets within the run, and no row that
+    # was already CONFIRMED gets re-sent - a confirmed exception has left the
+    # residual set and asking about it again would double-count it.
+    buckets = (recovery.confirmed, recovery.abstained, recovery.pending_unavailable)
+    ids = [i for bucket in buckets for i in bucket]
+    assert len(ids) == len(set(ids)), "an exception appears in two outcome buckets"
+    confirmed_before = {
+        row.exception_id
+        for row in store.get_queue(ALL_STATUSES)
+        if row.status is ExceptionStatus.CONFIRMED
+    }
+    assert not confirmed_before & set(ids), "a CONFIRMED row was re-sent to the model"
+
+    # AND THE ROUTE. PENDING_AI_UNAVAILABLE -> OPEN is the only legal way out;
+    # a row that arrived somewhere else would mean something wrote status
+    # directly rather than transitioning.
+    sample = sorted(pending_ids)[0]
+    row = store.get_exception(sample)
+    assert row is not None, sample
+    hops = [str(entry.to_status) for entry in row.audit]
+    assert hops[hops.index("PENDING_AI_UNAVAILABLE") + 1] == "OPEN", hops
+    print(
+        f"\n  {len(pending_ids)} pending -> re-sent, {len(recovery.abstained)} abstained, "
+        f"{len(still_pending)} still pending in the store; no id in two buckets"
+    )
