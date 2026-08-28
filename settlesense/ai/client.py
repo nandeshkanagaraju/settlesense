@@ -34,19 +34,25 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 __all__ = [
     "FIXTURE_DIR",
+    "MAX_ATTEMPTS",
     "MODEL",
+    "RETRYABLE",
     "FixtureMissError",
     "LLMClient",
+    "ModelUnavailable",
+    "OutageLLMClient",
     "RealLLMClient",
     "ReplayLLMClient",
     "prompt_hash",
     "record_fixture",
+    "retry_until_unavailable",
 ]
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent.parent / "fixtures" / "llm"
@@ -87,6 +93,96 @@ def prompt_hash(prompt: str) -> str:
 
 class FixtureMissError(RuntimeError):
     """No recorded response for this prompt. Loud, and never a network fallback."""
+
+
+class ModelUnavailable(RuntimeError):
+    """The model could not be reached, after retries. M10, SDD 4.9.
+
+    DELIBERATELY NOT A SUBCLASS OF FixtureMissError, and not the reverse. A
+    fixture miss is a fact about this repository - a prompt nobody recorded -
+    and the honest response is to abstain and say so. An outage is a fact about
+    the world, the case is untouched, and the honest response is to put it back
+    in the queue for the next run. Collapsing them would let a missing
+    recording be reported as a service failure, which is the one thing that
+    would make the outage numbers meaningless.
+
+    `attempts` is carried so a caller can say how hard it tried rather than
+    asserting a policy it does not own.
+    """
+
+    def __init__(self, message: str, attempts: int) -> None:
+        super().__init__(f"{message} (after {attempts} attempt(s))")
+        self.attempts = attempts
+
+
+MAX_ATTEMPTS = 3
+"""One call plus `llm_max_retries` (2) retries. SDD 4.9, config/thresholds.yaml.
+
+THREE ATTEMPTS, NOT THREE RETRIES. "after 2 retries" is three calls, and
+reading it as three retries would make the real behaviour four - a silent 33%
+more spend and a third longer to fail, in the path that runs when the provider
+is already struggling.
+"""
+
+
+RETRYABLE: tuple[type[Exception], ...] = (TimeoutError, json.JSONDecodeError, OSError, RuntimeError)
+"""The three SDD 4.9 failures, treated IDENTICALLY. Timeout, HTTP error, bad JSON.
+
+From the orchestrator's side each one means the same thing - no usable answer
+arrived - and the response is the same: put the case back. Splitting them into
+different handling would invite a caller to catch one and forget another, and
+the one forgotten would crash a run instead of degrading it.
+
+`OSError` is the HTTP/connection family; `RuntimeError` covers the empty-message
+and wrong-shape cases `_attempt` raises itself.
+"""
+
+
+def retry_until_unavailable(
+    call: Callable[[], dict[str, Any]], attempts: int = MAX_ATTEMPTS
+) -> dict[str, Any]:
+    """Call, retry, then ModelUnavailable. EXTRACTED SO IT CAN BE TESTED.
+
+    It lived inside `RealLLMClient.complete`, which D7 forbids constructing
+    inside a test run - so the retry policy was unreachable from the suite and
+    the only evidence it worked would have been reading it. A policy nobody can
+    exercise is a policy nobody has checked.
+
+    NO ERROR CLASS IS RETRIED DIFFERENTLY. A wrong guess about which failures
+    are transient is how a client hammers a provider that is already down.
+    """
+    if attempts < 1:
+        raise ValueError(f"attempts must be at least 1, got {attempts}")
+    last: Exception | None = None
+    for _ in range(attempts):
+        try:
+            return call()
+        except RETRYABLE as error:
+            last = error
+    raise ModelUnavailable(f"no usable response: {last}", attempts=attempts) from last
+
+
+class OutageLLMClient:
+    """A client that is always down. For `--simulate-outage` and for tests.
+
+    THIS IS THE ONLY WAY AN OUTAGE IS PRODUCED IN THIS PROJECT. There is no
+    flag inside the real client that makes it pretend to fail: a production
+    code path that can be told to fail is a production code path that can fail
+    by accident. The demo swaps the client instead, which is the same seam the
+    replay client already uses.
+
+    `calls` records what was attempted, so "nothing was sent" and "everything
+    was sent and everything failed" are distinguishable after the fact.
+    """
+
+    def __init__(self, reason: str = "simulated outage") -> None:
+        self.reason = reason
+        self.calls: list[str] = []
+
+    def complete(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+        del schema
+        self.calls.append(prompt_hash(prompt))
+        raise ModelUnavailable(self.reason, attempts=MAX_ATTEMPTS)
 
 
 class LLMClient(Protocol):
@@ -180,13 +276,31 @@ class RealLLMClient:
     def complete(  # pragma: no cover - needs network, never runs in the suite
         self, prompt: str, schema: dict[str, Any]
     ) -> dict[str, Any]:
-        """One structured completion.
+        """One structured completion, retried, then ModelUnavailable (M10).
 
-        The JSON schema is enforced PROVIDER-SIDE via `json_schema` response
-        format AND locally by `hypothesis.parse_hypotheses`. The provider-side
-        check is a convenience that saves a retry; it is not a guarantee, and
-        the local validator is what the pipeline actually relies on. A response
-        that satisfied the provider and not us is discarded either way.
+        Timeout, HTTP error and invalid JSON are the three failures SDD 4.9
+        names, and they are treated IDENTICALLY here on purpose. From the
+        orchestrator's side each one means the same thing - no usable answer
+        arrived - and the response is the same: put the case back. Splitting
+        them into different exception types would invite a caller to handle one
+        and forget another, and the one forgotten would crash a run.
+
+        WHAT IS NOT RETRIED: nothing. There is no error class here that is
+        retried differently, because a wrong guess about which failures are
+        transient is how a client hammers a provider that is already down.
+        Three attempts, then give up and say so.
+        """
+        return retry_until_unavailable(lambda: self._attempt(prompt, schema))
+
+    def _attempt(  # pragma: no cover - needs network, never runs in the suite
+        self, prompt: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        """One call. The schema is enforced PROVIDER-SIDE and locally.
+
+        The provider-side check is a convenience that saves a retry; it is not
+        a guarantee, and `hypothesis.parse_hypotheses` is what the pipeline
+        relies on. A response that satisfied the provider and not us is
+        discarded either way.
         """
         from openai import OpenAI
 

@@ -84,6 +84,39 @@ done it:
 Recorded rather than quietly omitted, because a reader comparing the dev and
 holdout tables will notice one row present in one and absent in the other.
 
+## The AI layer and the exception store operate on disjoint objects
+
+Found while building M10, and it changes what the outage demo can claim.
+
+**The M7 hypothesis loop was measured over dataset-derived pair exceptions** —
+`duplicate_exceptions(dataset)`, ids of the form `dup-ORD_A-ORD_B`, evidence
+being the two order ids. 26 of them on the dev seed, all fixture-backed, and
+every AI number in this README rests on that set.
+
+**The M6 store persists engine outcomes** — Population A/B/C exceptions with
+hash ids, evidence being a batch or case id. 47 of its rows are categorised
+`DUPLICATE_CANDIDATE`.
+
+**The two sets have zero ids in common, and zero recorded fixtures in common.**
+All 53 AI-eligible residual rows in the demo store miss the replay cache. So
+the AI layer has never run against the store, `resolved_by = AI_VERIFIED`
+appears on no persisted row, and `PENDING_AI_UNAVAILABLE` had no writer at all
+until M10 added one.
+
+**What this does and does not invalidate.** The outage path is real and
+measured: `OutageLLMClient` raises before any cache lookup, `ModelUnavailable`
+and `FixtureMissError` are unrelated types taking provably different paths, and
+the 53 rows genuinely go to `PENDING_AI_UNAVAILABLE`. What is NOT established
+is what a *healthy* run would have concluded for those rows — nobody has
+recorded a response for any of them. `probe()` prints exactly that on every
+`--simulate-outage` run rather than letting a screenshot imply otherwise.
+
+**Not fixed here, and the choice is deliberate.** Joining the two would mean
+either recording ~53 new fixtures against a live model, or persisting the
+pair-exceptions into the store — which would add rows to the queue and change
+the Population A/B/C denominators every published number divides by. Both are
+larger decisions than a degradation module should make on its own.
+
 ## The duplicate-pair task is fingerprinted, and the fingerprint is worthless
 
 **Every injected duplicate carries an `-R###` suffix on its invoice number.**

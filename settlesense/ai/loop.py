@@ -22,7 +22,7 @@ from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
 
-from settlesense.ai.client import FixtureMissError, LLMClient
+from settlesense.ai.client import FixtureMissError, LLMClient, ModelUnavailable
 from settlesense.ai.confidence import ConfidenceBreakdown, compute_confidence, should_auto_confirm
 from settlesense.ai.hypothesis import Hypothesis, eligible_exceptions, generate
 from settlesense.ai.verifier import VerificationResult, verify
@@ -61,9 +61,25 @@ class LoopOutcome:
     abstain_reason: AbstainReason | None
     hypotheses_seen: int
     rejections: tuple[str, ...]
+    unavailable: bool = False
+    """The model was DOWN. Not an abstention, and not counted as one (M10).
+
+    An abstention is a RESULT: hypotheses arrived, the verifier looked, and
+    nothing survived. That is a statement about the case and about the
+    evidence. An outage is a statement about the world - the case was never
+    examined at all - and the exception goes back in the queue for the next
+    run rather than into the human review pile.
+
+    Kept as a separate flag rather than a fifth AbstainReason because
+    `LoopReport.abstention_rate` divides by `sent`, and folding outages in
+    would let a provider incident inflate a number this project publishes as a
+    property of the verifier.
+    """
 
     @property
     def resolution_type(self) -> str:
+        if self.unavailable:
+            return "PENDING_AI_UNAVAILABLE"
         return "AI_VERIFIED" if self.confirmed else "ABSTAINED"
 
 
@@ -76,12 +92,27 @@ class LoopReport:
     confirmed: int
     abstained: int
     reasons: tuple[tuple[str, int], ...]
+    unavailable: int = 0
+    """Cases the model was down for. NEVER added to `abstained` (M10, D11).
+
+    Three outcomes, three counts: confirmed + abstained + unavailable == sent.
+    Two of those are decisions and one is a service failure, and a report that
+    summed them would say the loop "handled" every case it was handed.
+    """
 
     @property
     def abstention_rate(self) -> str:
-        if not self.sent:
+        """Abstentions over cases the model actually ANSWERED.
+
+        The denominator excludes outages. A run where the provider was down for
+        half the cases has not abstained on them - nothing looked at them - and
+        dividing by `sent` would report a verifier that got stricter when in
+        fact a service went away.
+        """
+        examined = self.sent - self.unavailable
+        if not examined:
             return "n/a"
-        return f"{self.abstained / self.sent:.4f}"
+        return f"{self.abstained / examined:.4f}"
 
 
 def resolve_exception(
@@ -99,6 +130,22 @@ def resolve_exception(
     """
     try:
         hypotheses = generate(exception, dataset, config, client)
+    except ModelUnavailable:
+        # THE CASE IS UNTOUCHED. No hypothesis, no verification, no confidence
+        # and NO abstain_reason - an abstention is a decision, and no decision
+        # was made here. The orchestrator reads `unavailable` and puts it back
+        # in the queue; the next run picks it up exactly as it was.
+        return LoopOutcome(
+            exception_id=exception.exception_id,
+            confirmed=False,
+            hypothesis=None,
+            verification=None,
+            confidence=None,
+            abstain_reason=None,
+            hypotheses_seen=0,
+            rejections=(),
+            unavailable=True,
+        )
     except FixtureMissError:
         return LoopOutcome(
             exception_id=exception.exception_id,
@@ -196,10 +243,21 @@ def run_loop(
         outcome.abstain_reason.value for outcome in outcomes if outcome.abstain_reason is not None
     )
     confirmed = sum(1 for outcome in outcomes if outcome.confirmed)
+    unavailable = sum(1 for outcome in outcomes if outcome.unavailable)
+    # ABSTAINED IS COUNTED, NOT DERIVED BY SUBTRACTION. `sent - confirmed` was
+    # correct while there were two outcomes and silently absorbs the third: an
+    # outage would have been reported as an abstention with no line of this
+    # file changing. Counting each and asserting they add up is the same rule
+    # the population metrics follow.
+    abstained = sum(1 for outcome in outcomes if not outcome.confirmed and not outcome.unavailable)
+    assert confirmed + abstained + unavailable == len(eligible), (
+        f"{confirmed} + {abstained} + {unavailable} != {len(eligible)} sent"
+    )
     return LoopReport(
         outcomes=outcomes,
         sent=len(eligible),
         confirmed=confirmed,
-        abstained=len(eligible) - confirmed,
+        abstained=abstained,
         reasons=tuple(sorted(reasons.items())),
+        unavailable=unavailable,
     )

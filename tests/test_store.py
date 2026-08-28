@@ -636,7 +636,7 @@ def test_the_store_converges_on_the_batch_engines_residual(
 
     Compared per population, never summed: three denominators (D11).
     """
-    dataset = full_run._cumulative_dataset(LAST_DELIVERY_DAY, DATA, config)
+    dataset = full_run.cumulative_dataset(LAST_DELIVERY_DAY, DATA, config)
     result = run(dataset, config, LATE_AS_OF)
 
     engine = {
@@ -715,7 +715,7 @@ def test_the_residual_shrinks_as_evidence_arrives(
     final_engine = sum(
         1
         for link in run(
-            ExceptionStore()._cumulative_dataset(LAST_DELIVERY_DAY, DATA, config),
+            ExceptionStore().cumulative_dataset(LAST_DELIVERY_DAY, DATA, config),
             config,
             LATE_AS_OF,
         ).batch_links
@@ -992,7 +992,7 @@ def test_the_convergence_check_fails_if_the_filter_is_widened(
     that has confirmed something across days separates them (11 vs 2).
     """
     full_run, _counts = incremental_run
-    dataset = full_run._cumulative_dataset(LAST_DELIVERY_DAY, DATA, config)
+    dataset = full_run.cumulative_dataset(LAST_DELIVERY_DAY, DATA, config)
     result = run(dataset, config, LATE_AS_OF)
     engine_b = sum(1 for link in result.batch_links if link.status is not ExceptionStatus.CONFIRMED)
 

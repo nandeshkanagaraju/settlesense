@@ -489,6 +489,66 @@ different content. Varying `config_hash`, `seed`, `dataset` or the rate — with
 the confirmed set held constant — now produces a different key and a different
 filename, and a test asserts each one separately.
 
+## Graceful degradation (`make ui-outage`)
+
+**A model outage does not perturb a single rule-resolved case, and that is
+checked as bytes.** The deterministic rows are serialized before and after an
+outage run through the same canonical serializer M5a used to prove telemetry
+never reached `results.json`, and compared — 283 rows, 64,286 bytes, identical.
+A matching *count* would pass if two rows had swapped statuses.
+
+| Outage run, dev store, day 24 | |
+|---|---:|
+| Sent to the model | 53 |
+| **Confirmed** | **0** |
+| `PENDING_AI_UNAVAILABLE` | 53 |
+| Abstained | 0 |
+| Deterministic confirmations touched | 0 |
+| Deterministic rows byte-identical | 283 / 283 |
+
+Zero, asserted as exactly `0` and printed — not "few". A partial outage (3 of
+53 calls fail) leaves 50 processed and 3 pending, and the 3 come back on the
+next day's run: `PENDING_AI_UNAVAILABLE` is in the residual set, and recovery
+goes back through `OPEN` rather than shortcutting to `CONFIRMED`.
+
+**An outage is not a fixture miss.** `ModelUnavailable` and `FixtureMissError`
+are unrelated types with unrelated handling. The same exception, same dataset:
+under an outage it becomes `PENDING_AI_UNAVAILABLE`; with no recording it
+becomes `ABSTAINED / FIXTURE_MISS`. If the two had converged, every unrecorded
+prompt would report as a service failure and the outage numbers would be
+measuring the fixture set.
+
+**Outages are counted separately from abstentions.** `confirmed + abstained +
+unavailable == sent`, asserted. The abstention rate divides by cases the model
+actually answered, so a provider incident cannot inflate a number published as
+a property of the verifier. `abstained` used to be `sent - confirmed`, which
+was right with two outcomes and would have silently absorbed the third.
+
+### `--simulate-outage` refuses to fake it
+
+A screen full of `PENDING_AI_UNAVAILABLE` rows is what a real outage looks
+like. It is also what a wrong fixture path, an empty cache or a broken client
+looks like — pixel for pixel. So the flag probes first and **exits 3** if the
+healthy client could not have answered:
+
+```
+probe: client OK (66 recordings, 03d7092f1b4f replays); 53 eligible residual
+rows, 0 of them recorded - NONE RECORDED, so the outage is real but what a
+healthy run would have concluded for these rows is unknown
+```
+
+That second clause is a real finding, printed every run rather than buried.
+**The store's AI-eligible rows have no recorded fixtures at all.** M7 was
+measured over dataset-derived pair exceptions (`dup-ORD_A-ORD_B`); the store
+persists engine outcomes under hash ids. The two sets are disjoint — zero
+overlap across 47 store rows and 26 recorded pairs. The outage is genuine
+(`OutageLLMClient` raises before any cache lookup), but what a *healthy* run
+would have concluded for those rows has never been measured. See
+[LIMITATIONS.md](LIMITATIONS.md).
+
+The AI stage runs **only** under this flag. Adding it to the default build
+would have silently changed every number the evidence queue publishes.
+
 ## Modules built
 
 Recorded here at submission: which Level 2 modules were built and which were

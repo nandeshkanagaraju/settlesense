@@ -26,7 +26,7 @@ define notimpl
 	@exit 1
 endef
 
-.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop record-fixtures demo-state ui ui-static export check golden-accept bench config-check fault-report collection-baseline eval-holdout
+.PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop record-fixtures demo-state ui ui-static ui-outage export check golden-accept bench config-check fault-report collection-baseline eval-holdout
 
 help:
 	@echo "SettleSense targets:"
@@ -48,6 +48,7 @@ help:
 	@echo "  ui            evidence queue, Streamlit (read-only)"
 	@echo "  ui-static     evidence queue as one HTML file (read-only)"
 	@echo "  export        CONFIRMED -> Tally-compatible XML, dry run (M9)"
+	@echo "  ui-outage     the queue with a simulated model outage (M10)"
 	@echo "  golden-accept regenerate golden files (deliberately awkward)"
 
 # --- data generation --------------------------------------------------------
@@ -213,6 +214,20 @@ ui: demo-state
 # easier to capture than a server that has to be running.
 ui-static: demo-state
 	$(PYTHON) -m settlesense.ui.build_static --db reports/ui/state.db --out reports/ui/queue.html
+
+# M10. The queue with a model outage in it, so the two waiting states can be
+# seen side by side. Days 1,12 rather than 1,12,24: by day 24 every
+# PENDING_EVIDENCE row has had its credit arrive, and the comparison the
+# screenshot exists to make would be one-sided.
+#
+# REFUSES (exit 3) if the healthy client could not have answered. A screen of
+# PENDING_AI_UNAVAILABLE rows looks identical whether the model was turned off
+# or was never on.
+ui-outage:
+	$(PYTHON) -m settlesense.ui.build_state --data data/dev --out reports/ui/outage.db \
+	  --days 1,12 --simulate-outage
+	$(PYTHON) -m settlesense.ui.build_static --db reports/ui/outage.db \
+	  --out reports/ui/queue-outage.html
 
 # --- export -----------------------------------------------------------------
 

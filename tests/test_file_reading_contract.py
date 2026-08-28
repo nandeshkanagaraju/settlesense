@@ -27,8 +27,8 @@ from pathlib import Path
 
 import pytest
 
-from settlesense.config import ConfigError, load_config
-from settlesense.ingest import IngestError, load_dataset
+from settlesense.config import AppConfig, ConfigError, load_config
+from settlesense.ingest import DayDataset, IngestError, load_dataset
 
 REPO = Path(__file__).resolve().parent.parent
 DATA = REPO / "data" / "dev"
@@ -54,6 +54,7 @@ REGISTERED_READERS = frozenset(
         "settlesense/ai/client.py",
         "settlesense/export/tally.py",
         "eval/run_export.py",
+        "settlesense/ui/build_state.py",
     }
 )
 """Every module allowed to read a file, each with a contract test below.
@@ -472,6 +473,58 @@ def _results_empty(tmp: Path) -> str:
     return "results present, rate absent: the metric was never computed"
 
 
+def _probe_inputs() -> tuple[DayDataset, AppConfig]:
+    """A real config and one day of real data, for the probe's signature.
+
+    Day 1 only, because the probe checks the RECORDINGS first and returns
+    before it looks at either. Constructing them is what the signature costs;
+    loading twenty days to reach an assertion about an empty directory would be
+    paying for a journey nobody takes.
+    """
+    config = load_config(REPO / "config")
+    return load_dataset(DATA, 1, config), config
+
+
+def _probe_missing(tmp: Path) -> str:
+    """No fixture DIRECTORY at all. `--simulate-outage` must refuse.
+
+    This is the misconfiguration whose output is pixel-identical to the thing
+    being demonstrated: every row comes back PENDING_AI_UNAVAILABLE either way.
+    Without this refusal a demo could show an outage that was really a wrong
+    path, and nothing on the screen would say which.
+    """
+    import settlesense.ui.build_state as build_state
+    from settlesense.exceptions.store import ExceptionStore
+
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(build_state, "FIXTURE_DIR", tmp / "absent")
+        with pytest.raises(build_state.ProbeFailed) as caught:
+            build_state.probe(ExceptionStore(), *_probe_inputs())
+    assert "no recordings" in str(caught.value)
+    return "fixture dir missing: refuse to simulate an outage"
+
+
+def _probe_empty(tmp: Path) -> str:
+    """A fixture directory that EXISTS and holds nothing.
+
+    Legitimate state - it is what a fresh clone has before `make
+    record-fixtures` - and still unusable for an outage demo. The two need
+    different messages because they send you to different places: fix the path,
+    versus record something.
+    """
+    import settlesense.ui.build_state as build_state
+    from settlesense.exceptions.store import ExceptionStore
+
+    empty = tmp / "fixtures"
+    empty.mkdir()
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(build_state, "FIXTURE_DIR", empty)
+        with pytest.raises(build_state.ProbeFailed) as caught:
+            build_state.probe(ExceptionStore(), *_probe_inputs())
+    assert str(empty) in str(caught.value), "the refusal does not name the directory it looked in"
+    return "fixture dir present and empty: nothing recorded yet"
+
+
 CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "settlesense/ingest.py": (_ingest_missing, lambda _tmp: _ingest_empty()),
     "settlesense/config.py": (_config_missing, _config_empty),
@@ -484,6 +537,7 @@ CONTRACTS: dict[str, tuple[Callable[[Path], str], Callable[[Path], str]]] = {
     "settlesense/ai/client.py": (_replay_missing, _replay_empty),
     "settlesense/export/tally.py": (_schema_missing, _schema_empty),
     "eval/run_export.py": (_results_missing, _results_empty),
+    "settlesense/ui/build_state.py": (_probe_missing, _probe_empty),
 }
 
 

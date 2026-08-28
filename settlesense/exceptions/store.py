@@ -952,7 +952,7 @@ class ExceptionStore:
         """
         resolved_as_of = as_of_for_arrival_day(arrival_day, config) if as_of is None else as_of
         ingested = self._ingest_day_files(arrival_day, data_dir)
-        dataset = self._cumulative_dataset(arrival_day, data_dir, config)
+        dataset = self.cumulative_dataset(arrival_day, data_dir, config)
 
         newly_confirmed = self.reevaluate_open(dataset, config, resolved_as_of, arrival_day)
         newly_opened = self._persist_outcomes(dataset, config, resolved_as_of, arrival_day)
@@ -979,9 +979,16 @@ class ExceptionStore:
             )
         return [self.ingest_file(path, arrival_day, seq) for seq, path in enumerate(paths, start=1)]
 
-    def _cumulative_dataset(
-        self, arrival_day: int, data_dir: Path, config: AppConfig
-    ) -> DayDataset:
+    def cumulative_dataset(self, arrival_day: int, data_dir: Path, config: AppConfig) -> DayDataset:
+        """Every day up to and including this one, merged.
+
+        PUBLIC FOR THE SAME REASON `subject_id` IS. A settlement line delivered
+        on day 2 pairs with a payment delivered on day 1, so any stage running
+        AFTER the day driver - the M10 AI stage is the first - needs the same
+        cumulative view the engine was given, not a fresh guess at which files
+        count. The M10 demo runner had reimplemented this glob and got a walrus
+        wrong; one implementation is the fix.
+        """
         days = sorted(
             {
                 int(name)
