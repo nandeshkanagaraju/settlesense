@@ -286,21 +286,16 @@ def test_rows_are_sorted_by_amount_descending_then_id(store: ExceptionStore) -> 
     print(f"\n  {len(rows)} rows, {rows[0].amount:,.2f} down to {rows[-1].amount:,.2f}")
 
 
-@pytest.mark.charter_guard
-def test_confirmed_and_closed_are_visibly_distinct() -> None:
-    """Different labels AND different colours.
-
-    CONFIRMED means explained; CLOSED means the accounting action was emitted.
-    A reader who cannot tell them apart at a glance cannot tell whether money
-    moved, so the distinction is carried twice.
-    """
-    confirmed = STATUS_STYLES[ExceptionStatus.CONFIRMED]
-    closed = STATUS_STYLES[ExceptionStatus.CLOSED]
-    assert confirmed.label != closed.label, (confirmed.label, closed.label)
-    assert confirmed.colour != closed.colour, "the two greens are identical"
-    assert "✓" in closed.label, "CLOSED carries no check mark"
-    assert len(STATUS_STYLES) == len(ExceptionStatus) == 6, len(STATUS_STYLES)
-    print(f"\n  CONFIRMED {confirmed.label!r} vs CLOSED {closed.label!r}, distinct colours")
+# CONFIRMED-versus-CLOSED lived here and has been DELETED, completing a move
+# that stalled half-done. `test_m9_export.py` carries the stronger copy - it
+# checks `background` too - and its docstring has said "MOVED HERE FROM THE M8
+# SUITE" since it was written. What actually happened is that it was copied, the
+# destination was strengthened, and the weaker original stayed green.
+#
+# The remaining coverage: `test_no_two_statuses_render_alike` below subsumes the
+# pairwise part for all 15 pairs rather than one, and the check-mark assertion
+# belongs with the exporter, which is the only thing that can produce a CLOSED
+# row to render.
 
 
 # ===========================================================================
