@@ -3,7 +3,7 @@ exactly like a check that passes.
 
 Same class of defect as `-q` in two places swallowing `pytest -v`: nothing is
 red, nothing is missing from the output, and the thing you believe is happening
-is not happening. Three ways that can occur here, one test group each:
+is not happening. Four ways that can occur here, one test group each:
 
   A DECLARED DEPENDENCY IS NOT INSTALLED. Found live: five of eight declared
   dependencies were absent from the venv, including python-Levenshtein, which
@@ -18,7 +18,15 @@ is not happening. Three ways that can occur here, one test group each:
 
   TESTS STOP BEING COLLECTED. A file renamed out of the test_*.py pattern, a
   class that stopped being discovered, a conftest error that empties a
-  directory. The count drops and every remaining test still passes.
+  directory. The count drops and every remaining test still passes. The
+  baseline that catches this is checked in BOTH directions, because it was
+  once checked in one: three whole modules were absent from the manifest, and
+  a floor cannot be undercut by a file it has never heard of.
+
+  A TEST READS A FILE THE REPOSITORY DOES NOT HAVE. It passes on the machine
+  that wrote the file and fails in every clone. Found live: three tests read a
+  gitignored artifact, two of them dying on a raw FileNotFoundError, while the
+  committed pass-count said 1111.
 """
 
 from __future__ import annotations
@@ -26,6 +34,7 @@ from __future__ import annotations
 import ast
 import json
 import tomllib
+from collections.abc import Iterable
 from importlib import import_module
 from importlib.metadata import PackageNotFoundError, packages_distributions, version
 from pathlib import Path
@@ -261,6 +270,28 @@ def _baseline() -> dict[str, object]:
     return data
 
 
+def _test_files_on_disk() -> set[str]:
+    return {str(path.relative_to(REPO)) for path in TEST_DIR.glob("test_*.py")}
+
+
+def vanished_from_disk(baseline_files: Iterable[str], on_disk: Iterable[str]) -> list[str]:
+    """Baseline -> disk. Files the baseline knows that no longer exist."""
+    return sorted(set(baseline_files) - set(on_disk))
+
+
+def absent_from_baseline(baseline_files: Iterable[str], on_disk: Iterable[str]) -> list[str]:
+    """Disk -> baseline. THE DIRECTION THAT WAS MISSING.
+
+    A floor can only be undercut by a file it knows about. Three modules -
+    test_m10_degradation.py, test_m10_store_path.py and test_limitations.py -
+    were absent from the manifest entirely, so all 53 of their tests could have
+    been deleted with the suite green. A one-way check cannot see a file it
+    never knew about, and the newest tests are exactly the ones a stale
+    baseline has never heard of.
+    """
+    return sorted(set(on_disk) - set(baseline_files))
+
+
 def test_the_baseline_file_is_well_formed() -> None:
     data = _baseline()
     assert isinstance(data.get("total"), int) and int(data["total"]) > 0  # type: ignore[call-overload]
@@ -299,13 +330,62 @@ def test_no_baseline_file_disappeared_entirely() -> None:
     """A file deleted or renamed out of test_*.py collects zero, and zero is
     not less than its baseline if the file is simply absent from the run."""
     files = dict(_baseline()["files"])  # type: ignore[call-overload]
-    on_disk = {str(path.relative_to(REPO)) for path in TEST_DIR.glob("test_*.py")}
-    vanished = sorted(set(files) - on_disk)
+    vanished = vanished_from_disk(files, _test_files_on_disk())
     assert not vanished, (
         f"file(s) in the baseline no longer exist as test modules: {vanished}. "
         "A rename out of the test_*.py pattern removes every test in the file "
         "from collection without failing anything."
     )
+
+
+@pytest.mark.hygiene
+def test_every_test_file_on_disk_appears_in_the_baseline() -> None:
+    """THE OTHER DIRECTION, and it was missing on a full run.
+
+    The baseline was 82 tests stale and three whole modules were absent from
+    it: test_m10_degradation.py, test_m10_store_path.py, test_limitations.py.
+    Because the per-file check only walks baseline -> disk, and the total is a
+    floor, every one of their 53 tests could have been deleted with `make test`
+    green. The M10 recovery tests were among them - the guard protecting the
+    tests that guard the outage path had a floor of zero for them.
+
+    A stale baseline does not announce itself. It goes on passing, and the
+    slack it carries is invisible in a green run - which is the same reason
+    this file exists at all.
+    """
+    files = dict(_baseline()["files"])  # type: ignore[call-overload]
+    unknown = absent_from_baseline(files, _test_files_on_disk())
+    assert not unknown, (
+        f"test module(s) on disk that the baseline has never heard of: {unknown}.\n"
+        "Until the baseline knows a file, deleting every test in it fails nothing. "
+        "Regenerate in the commit that adds the file:\n"
+        "  SETTLESENSE_ACCEPT_BASELINE=1 make collection-baseline"
+    )
+
+
+@pytest.mark.hygiene
+def test_the_baseline_comparison_fires_in_BOTH_directions() -> None:
+    """POSITIVE CONTROL for each direction, fed a defect it must catch.
+
+    Both are constructed rather than reproduced: the baseline is correct now,
+    so the only way to show either direction can fail is to hand it the
+    disagreement. A one-way check passed for the whole of M9 and M10 while
+    looking exactly like a two-way one.
+    """
+    # Direction 1: a baseline file whose tests were deleted with the file.
+    assert vanished_from_disk(
+        {"tests/test_gone.py", "tests/test_kept.py"}, {"tests/test_kept.py"}
+    ) == ["tests/test_gone.py"], "a deleted module would not be noticed"
+
+    # Direction 2: a new module added without regenerating - THE HOLE.
+    assert absent_from_baseline(
+        {"tests/test_kept.py"}, {"tests/test_kept.py", "tests/test_brand_new.py"}
+    ) == ["tests/test_brand_new.py"], "a module the baseline never knew would not be noticed"
+
+    # And neither fires when the two agree, or they would fail on everything.
+    same = {"tests/test_a.py", "tests/test_b.py"}
+    assert vanished_from_disk(same, same) == []
+    assert absent_from_baseline(same, same) == []
 
 
 def test_total_collected_meets_the_baseline() -> None:
@@ -324,7 +404,7 @@ def test_total_collected_meets_the_baseline() -> None:
     if collected_files < on_disk:
         # Partial run. Assert what IS knowable: every file collected is one the
         # baseline knows about, so a partial run cannot mask a stray module.
-        unknown = sorted(collected_files - set(dict(data["files"])))  # type: ignore[call-overload]
+        unknown = absent_from_baseline(dict(data["files"]), collected_files)  # type: ignore[call-overload]
         assert not unknown, f"collected file(s) absent from the baseline: {unknown}"
         return
 
