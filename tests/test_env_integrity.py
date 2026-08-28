@@ -358,3 +358,179 @@ def test_the_baseline_is_never_rewritten_by_the_test_suite() -> None:
                     "baseline from inside the suite. A baseline that updates itself "
                     "records whatever happened rather than what should happen."
                 )
+
+
+# ---------------------------------------------------------------------------
+# 4. Every file a test reads is IN THE REPOSITORY
+# ---------------------------------------------------------------------------
+
+READS_ALLOWED_TO_BE_ABSENT = {
+    "data/eval": (
+        "the 20-seed AI evaluation set: ~146MB, gitignored, and regenerable "
+        "byte-identically from (frozen generator commit, seed). The tests that "
+        "read it SKIP with a stated reason when it is absent."
+    ),
+    "reports/ui/state.db": (
+        "a build output of `make demo-state`. A committed database would drift "
+        "from the code that writes it, and the tests that read it skip when it "
+        "is absent rather than failing."
+    ),
+    "does-not-exist": (
+        "a literal, not a path: the reader-contract tests use it to prove a "
+        "loader refuses a missing file rather than inventing a default."
+    ),
+    "tests/.hygiene_probe": (
+        "a scratch file the repo-hygiene test creates and removes inside one "
+        "test, to prove its own scanner can fire."
+    ),
+}
+"""Paths a test may name that git does not track, each with the reason.
+
+DELIBERATELY SMALL AND DELIBERATELY ANNOYING TO EXTEND. Every entry is a place
+where the suite depends on something a fresh clone does not have, which is the
+defect this group exists to prevent. `test_no_read_allowance_is_stale` fails if
+an entry stops being referenced, so this cannot rot into a list of everything.
+"""
+
+
+def _repo_root_names(tree: ast.AST) -> set[str]:
+    """Names bound to the repository root in this module."""
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            dumped = ast.dump(node.value)
+            if (
+                isinstance(target, ast.Name)
+                and "__file__" in dumped
+                and ("parent" in dumped or "parents" in dumped)
+            ):
+                names.add(target.id)
+    return names
+
+
+def _div_chain(node: ast.AST) -> tuple[ast.AST, list[str]] | None:
+    """Resolve `BASE / "a" / "b"` to (BASE, ["a", "b"])."""
+    parts: list[str] = []
+    current = node
+    while isinstance(current, ast.BinOp) and isinstance(current.op, ast.Div):
+        if not (isinstance(current.right, ast.Constant) and isinstance(current.right.value, str)):
+            return None
+        parts.append(current.right.value)
+        current = current.left
+    return (current, list(reversed(parts))) if parts else None
+
+
+def _referenced_paths() -> dict[str, set[str]]:
+    """Every repo-relative path the test suite names, to `file:line` sites."""
+    found: dict[str, set[str]] = {}
+    for path in sorted(TEST_DIR.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, str(path))
+        roots = _repo_root_names(tree)
+        # A constant like `DATA = REPO / "data" / "dev"` becomes a root itself,
+        # so `DATA / "day1_ledger.csv"` resolves rather than being dropped.
+        aliases: dict[str, list[str]] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                chain = _div_chain(node.value)
+                if (
+                    isinstance(target, ast.Name)
+                    and chain
+                    and isinstance(chain[0], ast.Name)
+                    and chain[0].id in roots
+                ):
+                    aliases[target.id] = chain[1]
+        for node in ast.walk(tree):
+            chain = _div_chain(node)
+            if not chain or not isinstance(chain[0], ast.Name):
+                continue
+            base, parts = chain
+            if base.id in roots:  # type: ignore[attr-defined]
+                relative = "/".join(parts)
+            elif base.id in aliases:  # type: ignore[attr-defined]
+                relative = "/".join(aliases[base.id] + parts)  # type: ignore[attr-defined]
+            else:
+                continue
+            site = f"{path.relative_to(REPO)}:{getattr(node, 'lineno', 0)}"
+            found.setdefault(relative, set()).add(site)
+    return found
+
+
+def test_the_path_scanner_resolved_something() -> None:
+    """A scanner that resolves nothing passes every assertion below it."""
+    found = _referenced_paths()
+    assert len(found) >= 40, (
+        f"only {len(found)} path expressions resolved; the suite names far more, "
+        "so the AST walk has stopped matching the shape tests actually use"
+    )
+
+
+@pytest.mark.hygiene
+def test_every_file_a_test_reads_is_tracked_in_git(tracked_files: frozenset[str]) -> None:
+    """THE FILE MUST BE IN THE REPOSITORY, not merely on this machine.
+
+    `reports/ai/real_model_sample.json` was gitignored while three tests in
+    test_ai.py read it. Here it passed; in every fresh clone two of the three
+    died on a raw FileNotFoundError and the third on an assertion. The working
+    tree that wrote the file is the one place the defect is invisible.
+
+    TRACKED OR ALLOWLISTED, and absence is not an excuse. Checking only
+    "exists but untracked" would pass in a clean clone, where the file is
+    simply gone - which is precisely the environment that breaks. So a named
+    path must be something git has, or something this module has written down
+    a reason for.
+    """
+    offenders = []
+    for relative, sites in sorted(_referenced_paths().items()):
+        if relative in READS_ALLOWED_TO_BE_ABSENT:
+            continue
+        target = REPO / relative
+        if target.is_dir():
+            # Directories are not tracked; their contents are. A directory with
+            # nothing tracked under it is as absent from a clone as a file.
+            if any(name.startswith(f"{relative}/") for name in tracked_files):
+                continue
+            offenders.append(f"{relative} (directory, nothing tracked under it) {sorted(sites)}")
+        elif relative not in tracked_files:
+            state = "exists here but is untracked" if target.exists() else "absent"
+            offenders.append(f"{relative} ({state}) {sorted(sites)}")
+    assert not offenders, (
+        "test(s) read files git does not track:\n  "
+        + "\n  ".join(offenders)
+        + "\nA test reading an untracked file passes on the machine that wrote it "
+        "and fails for everyone else. Commit the file, or add it to "
+        "READS_ALLOWED_TO_BE_ABSENT with the reason."
+    )
+
+
+def test_no_read_allowance_is_stale() -> None:
+    """An allowance nobody uses is an allowance that stopped being examined."""
+    referenced = set(_referenced_paths())
+    unused = sorted(set(READS_ALLOWED_TO_BE_ABSENT) - referenced)
+    assert not unused, (
+        f"READS_ALLOWED_TO_BE_ABSENT lists path(s) no test names any more: {unused}. "
+        "Remove them; a standing exemption for something that no longer exists is "
+        "how the list becomes a list of everything."
+    )
+    for relative, reason in READS_ALLOWED_TO_BE_ABSENT.items():
+        assert len(reason) > 40, f"{relative} is exempted without a real reason"
+
+
+@pytest.mark.hygiene
+def test_the_untracked_read_scanner_would_fire(tracked_files: frozenset[str]) -> None:
+    """POSITIVE CONTROL. The scanner must catch the defect it was written for.
+
+    Fed the exact shape that shipped - a module-level constant pointing at a
+    file git does not track - it has to object. A scanner that cannot fail here
+    is decoration on a green run.
+    """
+    invented = "reports/ai/not_committed_sample.json"
+    assert invented not in tracked_files
+    offenders = [
+        relative
+        for relative in (invented,)
+        if relative not in tracked_files and relative not in READS_ALLOWED_TO_BE_ABSENT
+    ]
+    assert offenders == [invented], "the tracked-file test would not have objected"

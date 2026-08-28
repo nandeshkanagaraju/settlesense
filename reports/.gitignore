@@ -51,6 +51,18 @@ ai/*
 # check that it is a different measurement rather than a revision of the
 # first. It also carries the pairing key, which is a published rule.
 !ai/store_path.json
+# THE REAL-MODEL SAMPLE, and it was missed when its two siblings above were
+# un-ignored. Same rule, same reason, and the omission was not visible from
+# inside a working tree that already had the file: three tests in test_ai.py
+# read it, so they passed here and failed in every fresh clone - two of them as
+# a raw FileNotFoundError. It also carries the ONLY copy of the 24/40 and 33/40
+# the README publishes, which were unfalsifiable for exactly as long.
+#
+# It is the one artifact here that cost money to produce. That is an argument
+# for committing it, not against: `make record-fixtures` is the only target
+# that spends, and nobody should have to spend again to check a published
+# number.
+!ai/real_model_sample.json
 
 # The rendered queue is committed - the README links it and the screenshots come
 # from it. state.db is NOT: it is a build output of `make demo-state`, it is
