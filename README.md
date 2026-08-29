@@ -480,13 +480,16 @@ eval, bench and the UI all replay from `fixtures/llm/`, and `make
 record-fixtures` is the only target that would spend anything.
 
 ```
-python -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 ```
 
 The `[dev]` extra is not optional in practice: it carries ruff, mypy and
 lxml-stubs, and `make check` runs all three. Every `make` target prefers
 `.venv/bin/python` when it exists, so activating is enough.
+
+Streamlit prompts for an email address on its very first run on a machine;
+pressing Enter dismisses it permanently.
 
 ```
 make gen           # dev dataset,      seed 42
