@@ -1,8 +1,11 @@
 # Abstain — a settlement reconciliation agent that refuses to guess
 
-The project is Abstain; the Python package is `settlesense`, its original name.
-The package name is left unchanged because renaming it would invalidate the
-committed artifacts every published figure is asserted against.
+The project is Abstain, and so is the repository —
+[github.com/nandeshkanagaraju/Abstain](https://github.com/nandeshkanagaraju/Abstain),
+renamed from `settlesense`. The Python package keeps that original name:
+renaming it would invalidate the committed artifacts every published figure is
+asserted against, so the package is `settlesense` deliberately, not as an
+oversight.
 
 ## Results
 
@@ -486,6 +489,8 @@ eval, bench and the UI all replay from `fixtures/llm/`, and `make
 record-fixtures` is the only target that would spend anything.
 
 ```
+git clone https://github.com/nandeshkanagaraju/Abstain.git
+cd Abstain
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 ```
