@@ -1,4 +1,4 @@
-# SettleSense — Software Design Document (SDD)
+# Abstain — Software Design Document (SDD)
 
 **Version:** 1.0
 **Companion to:** SettleSense_PDD.md

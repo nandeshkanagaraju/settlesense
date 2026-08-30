@@ -402,7 +402,7 @@ def throughput_markdown(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the SettleSense evaluation.")
+    parser = argparse.ArgumentParser(description="Run the Abstain evaluation.")
     parser.add_argument("--data", type=Path, required=True, help="directory of day*_*.csv")
     parser.add_argument("--truth", type=Path, required=True, help="truth_<seed>.json")
     parser.add_argument("--baselines", default="all", help=f"all|{'|'.join(BASELINES)}")

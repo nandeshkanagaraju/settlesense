@@ -1,3 +1,9 @@
+# Abstain — a settlement reconciliation agent that refuses to guess
+
+The project is Abstain; the Python package is `settlesense`, its original name.
+The package name is left unchanged because renaming it would invalidate the
+committed artifacts every published figure is asserted against.
+
 ## Results
 
 **Three sets, three different rules, reported separately and never blended.**
@@ -553,6 +559,11 @@ successful run, so the target does not touch them. To retake them:
 make demo-state && make ui     # then screenshot localhost:8501
 make ui-outage                 # SETTLESENSE_DB=reports/ui/outage.db make ui
 ```
+
+The two manual shots still carry the heading from before the display rename to
+Abstain, for exactly this reason: they cannot be retaken by a target, and a
+hand-retake substitutes a new manual capture for a recorded one. The four
+automated shots show the current heading.
 
 ## Generator independence
 

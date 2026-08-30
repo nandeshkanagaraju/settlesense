@@ -30,6 +30,7 @@ from settlesense.exceptions.store import Population
 from settlesense.ui.queue import (
     CATEGORY_COLUMN_PIXELS,
     CATEGORY_COLUMNS,
+    PAGE_TITLE,
     SEQUENCE_CAPTION,
     EvidencePanel,
     arrival_days,
@@ -74,8 +75,8 @@ def main() -> None:  # pragma: no cover - requires a Streamlit runtime
     from settlesense.ai.client import ReplayLLMClient
     from settlesense.exceptions.taxonomy import VarianceCategory
 
-    st.set_page_config(page_title="SettleSense — evidence queue", layout="wide")
-    st.title("SettleSense — evidence queue")
+    st.set_page_config(page_title=PAGE_TITLE, layout="wide")
+    st.title(PAGE_TITLE)
 
     config = load_config(CONFIG_PATH)
     dataset = load_days(DATA_PATH, config)

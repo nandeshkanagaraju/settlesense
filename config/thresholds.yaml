@@ -1,4 +1,4 @@
-# SettleSense - abstention, scoring and safety thresholds.
+# Abstain - abstention, scoring and safety thresholds.
 #
 # D12: EVERY decimal-valued entry is a QUOTED STRING, coerced to Decimal by
 #      load_config(). An unquoted decimal parses as a YAML float and the

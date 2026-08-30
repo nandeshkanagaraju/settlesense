@@ -1,4 +1,4 @@
-# SettleSense — Claude Code Build Prompts (Module by Module)
+# Abstain — Claude Code Build Prompts (Module by Module)
 
 **How to use this file**
 

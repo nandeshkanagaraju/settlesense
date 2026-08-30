@@ -1,4 +1,4 @@
-# SettleSense — Product Design Document (PDD)
+# Abstain — Product Design Document (PDD)
 
 **Version:** 1.0
 **Date:** 22 August 2026
@@ -9,7 +9,7 @@
 
 ## 1. One-line definition
 
-SettleSense is a verified settlement-reconciliation agent that resolves the computable deterministically, investigates only the genuinely ambiguous with a constrained language model, abstains when evidence is insufficient, and — if the optional export module is built — emits only the accounting entries it can prove.
+Abstain is a verified settlement-reconciliation agent that resolves the computable deterministically, investigates only the genuinely ambiguous with a constrained language model, abstains when evidence is insufficient, and — if the optional export module is built — emits only the accounting entries it can prove.
 
 ---
 
@@ -32,7 +32,7 @@ The gap is specific and documented: the gateway tells you *what it settled*; it 
 
 ## 3. Product thesis (non-negotiable)
 
-> SettleSense measures whether a constrained language model adds value **beyond** a strong deterministic reconciliation engine, and deploys AI only where the held-out evidence justifies it.
+> Abstain measures whether a constrained language model adds value **beyond** a strong deterministic reconciliation engine, and deploys AI only where the held-out evidence justifies it.
 
 This is a measurement project as much as a product. The deterministic engine is built to its strongest reasonable form first. The AI layer must earn each category it is allowed to touch. **Zero AI uplift is a valid, publishable outcome and will be reported honestly.**
 
@@ -44,7 +44,7 @@ Two failure modes are explicitly forbidden:
 
 ## 4. Users and jobs
 
-| User | Job to be done | What SettleSense gives them |
+| User | Job to be done | What Abstain gives them |
 |---|---|---|
 | Merchant finance associate | Close yesterday's settlement | A ranked exception queue with evidence, not a spreadsheet |
 | Merchant accountant | Post journal entries correctly | Review verified reconciliation results and, **if M9 is included**, generate a dry-run, schema-validated Tally-compatible export |
@@ -179,7 +179,7 @@ Two noise types are withheld from engine tuning and reported separately as an **
 | Naive | Amount + date-window matching only |
 | Deterministic-only | Full normalization, rules, fuzzy UTR, fee arithmetic, duplicate detection — no AI |
 | Strong LLM-only | Same normalized records, candidate retrieval, sensible chunking, carefully tuned structured prompt. Tuned in good faith; not a strawman. |
-| SettleSense | Deterministic engine + verified hypothesis loop + abstention |
+| Abstain | Deterministic engine + verified hypothesis loop + abstention |
 
 ### 8.3 The headline metric
 
@@ -247,7 +247,7 @@ The track bar names three things and lists throughput **first**: *"Throughput pl
 
 ### 8.4b Cash position — optional, cheap, directly on-brief
 
-The track headline is *"Run the books and the cash position."* SettleSense covers the books through verified journal entries. Cash position is a small addition derivable from data already in the pipeline, with no new inputs:
+The track headline is *"Run the books and the cash position."* Abstain covers the books through verified journal entries. Cash position is a small addition derivable from data already in the pipeline, with no new inputs:
 
 | Output | Derivation |
 |---|---|
@@ -330,4 +330,4 @@ The track floor is a 50+ record batch. Exceeding it by two orders of magnitude i
 
 ## 12. Non-goals restated
 
-SettleSense is not an AI CFO, not a chatbot, not a payment router, and not a tax adviser. It closes one loop — daily settlement close — and measures itself honestly while doing it.
+Abstain is not an AI CFO, not a chatbot, not a payment router, and not a tax adviser. It closes one loop — daily settlement close — and measures itself honestly while doing it.

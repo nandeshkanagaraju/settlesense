@@ -27,6 +27,7 @@ from settlesense.exceptions.store import (
 from settlesense.ingest import DayDataset
 from settlesense.types import ExceptionStatus
 from settlesense.ui.queue import (
+    PAGE_TITLE,
     SEQUENCE_CAPTION,
     EvidencePanel,
     PopulationSummary,
@@ -363,8 +364,8 @@ def render_page(
         )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>SettleSense — evidence queue</title><style>{_CSS}</style></head><body>
-<h1>SettleSense — evidence queue</h1>
+<title>{_esc(PAGE_TITLE)}</title><style>{_CSS}</style></head><body>
+<h1>{_esc(PAGE_TITLE)}</h1>
 <p class="sub">Read-only view of the state DB · {_esc(day_note)} ·
 calendar {_esc(config.calendar.version)} · config {_esc(config.config_hash)}</p>
 {outage_note}

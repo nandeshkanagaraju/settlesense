@@ -1,4 +1,4 @@
-# SettleSense - MDR fee rates per merchant profile, per payment method.
+# Abstain - MDR fee rates per merchant profile, per payment method.
 #
 # D12: every rate is a QUOTED STRING, coerced to Decimal by load_config().
 # An unquoted numeric here parses as a YAML float and the loader RAISES.

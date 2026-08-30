@@ -36,6 +36,7 @@ from settlesense.matching.engine import run
 from settlesense.types import AuditEntry, Exception_, ExceptionStatus, Money, ResolutionSource
 
 __all__ = [
+    "PAGE_TITLE",
     "POPULATION_LABELS",
     "STATUS_STYLES",
     "MoneyTrail",
@@ -682,6 +683,15 @@ A clipped `MISSING_VS_LATE_CRED[` reads as a data error rather than a column
 width, and this is the view whose whole purpose is an honest exception list.
 """
 
+
+PAGE_TITLE = "Abstain — evidence queue"
+"""The heading BOTH views render, defined once in the shared layer.
+
+Abstain is the project's display name; the package keeps its original name,
+`settlesense`. A second copy of this string in either renderer is a second
+chance for the two views to disagree, which is the exact defect class this
+module exists to close.
+"""
 
 SEQUENCE_CAPTION = (
     "Open batch links rise before they fall: day 12 delivers batches whose credit "

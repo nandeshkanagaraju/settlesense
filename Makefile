@@ -1,4 +1,4 @@
-# SettleSense - build targets (SDD section 8).
+# Abstain - build targets (SDD section 8).
 #
 # Targets whose implementation does not exist yet REFUSE and exit 1. They do
 # not silently pass: a green target that ran nothing is worse than a red one,
@@ -29,7 +29,7 @@ endef
 .PHONY: help gen gen-holdout eval-set test eval eval-ai eval-ai-loop record-fixtures demo-state ui ui-static ui-outage ai-store export check golden-accept bench config-check fault-report collection-baseline eval-holdout screenshots
 
 help:
-	@echo "SettleSense targets:"
+	@echo "Abstain targets:"
 	@echo "  gen           generate the dev dataset       (seed 42)"
 	@echo "  gen-holdout   generate the held-out dataset  (seed 999, +withheld noise)"
 	@echo "  eval-set      regenerate the AI evaluation set (seeds 1000-1019)"
