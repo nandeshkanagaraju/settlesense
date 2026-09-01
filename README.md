@@ -509,6 +509,9 @@ make eval          # all baselines against the DEV set (seed 42)
 make eval-holdout  # the HELD-OUT set (seed 999) - run ONCE, at the end
 make eval-set      # regenerate the AI evaluation set (seeds 1000-1019)
 make bench         # throughput scaling table -> reports/bench.md
+                   #   rewrites it with YOUR machine's timings; restore with
+                   #   `git checkout -- reports/bench.md` before `make test`,
+                   #   or the suite fails on purpose - explained below
 make test          # no network, deterministic, under 120 seconds
 make check         # ruff + mypy + determinism guard tests
 
