@@ -560,21 +560,23 @@ screenshot still match what the code renders?" could only be answered by
 trusting the image.
 
 Two of the six — `streamlit-queue.png` and `streamlit-outage.png` — are
-**taken by hand and cannot currently be automated.** The Streamlit app renders
+**captured outside `make screenshots`.** The Streamlit app renders
 client-side, and headless Chrome captures its grey skeleton placeholders: a 4s
 settle, a 25s settle and disabling XSRF and CORS all produced a 29KB image of a
 loading state. Writing that over a real screenshot would have looked like a
-successful run, so the target does not touch them. To retake them:
+successful run, so the target does not touch them. A *visible* Chrome window
+does render fully — the committed pair was captured from one over the DevTools
+protocol at a forced 1600×1400 viewport. To retake them:
 
 ```
-make demo-state && make ui     # then screenshot localhost:8501
-make ui-outage                 # SETTLESENSE_DB=reports/ui/outage.db make ui
+make demo-state && make ai-store   # the store the shot shows: 283 DETERMINISTIC, 2 AI_VERIFIED
+make ui                            # then capture localhost:8501 in a HEADED browser
+make ui-outage                     # then: SETTLESENSE_DB=reports/ui/outage.db make ui, capture again
 ```
 
-The two manual shots still carry the heading from before the display rename to
-Abstain, for exactly this reason: they cannot be retaken by a target, and a
-hand-retake substitutes a new manual capture for a recorded one. The four
-automated shots show the current heading.
+Without the `make ai-store` step the queue renders its pre-AI state — 52
+residual and no AI_VERIFIED rows — and the shot silently contradicts the
+figures above.
 
 ## Generator independence
 
