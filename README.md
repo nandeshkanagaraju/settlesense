@@ -7,6 +7,10 @@ renaming it would invalidate the committed artifacts every published figure is
 asserted against, so the package is `settlesense` deliberately, not as an
 oversight.
 
+**Five-minute walkthrough:** https://youtu.be/kbNDMorslg4
+
+Razorpay AI Buildathon · Track 04 — AI Finance Controller
+
 `SettleSense_PDD.md`, `_SDD.md`, `_BUILD_PROMPTS.md` — the product definition,
 the software design including the Determinism Charter, and the module build
 prompts. Hashed in [`SPEC_MANIFEST.json`](SPEC_MANIFEST.json) and asserted by
