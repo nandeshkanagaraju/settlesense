@@ -7,6 +7,12 @@ renaming it would invalidate the committed artifacts every published figure is
 asserted against, so the package is `settlesense` deliberately, not as an
 oversight.
 
+`SettleSense_PDD.md`, `_SDD.md`, `_BUILD_PROMPTS.md` — the product definition,
+the software design including the Determinism Charter, and the module build
+prompts. Hashed in [`SPEC_MANIFEST.json`](SPEC_MANIFEST.json) and asserted by
+`tests/test_spec_present.py`. The filenames keep the original project name for
+the same reason the package does.
+
 ## Results
 
 **Three sets, three different rules, reported separately and never blended.**
