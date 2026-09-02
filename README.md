@@ -523,6 +523,10 @@ make bench         # throughput scaling table -> reports/bench.md
                    #   `git checkout -- reports/bench.md` before `make test`,
                    #   or the suite fails on purpose - explained below
 make test          # no network, deterministic, under 120 seconds
+                   #   A fresh clone reports 1,082 passed and 43 skipped: the
+                   #   43 need the 20-seed AI evaluation set, which is
+                   #   gitignored for size. Run `make eval-set` first for the
+                   #   full 1,125. Each skip names this in its own message.
 make check         # ruff + mypy + determinism guard tests
 
 make demo-state    # build the state DB the queue reads (writes)
